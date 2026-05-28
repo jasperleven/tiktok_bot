@@ -1,6 +1,8 @@
 import asyncio
 import os
+import threading
 import aiohttp
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -19,7 +21,6 @@ TIKTOK_REDIRECT_URI = os.getenv("TIKTOK_REDIRECT_URI")
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-# Хранилище токенов аккаунтов { open_id: { access_token, display_name } }
 accounts = {}
 
 class PostStates(StatesGroup):
@@ -28,9 +29,20 @@ class PostStates(StatesGroup):
     waiting_hashtags = State()
     waiting_accounts = State()
 
-# =============================================================================
-# /start
-# =============================================================================
+# Простой веб-сервер для Render
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"OK")
+    def log_message(self, format, *args):
+        pass
+
+def run_web():
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), HealthHandler)
+    server.serve_forever()
+
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     await message.answer(
@@ -41,9 +53,6 @@ async def cmd_start(message: types.Message):
         "/connect — подключить новый аккаунт"
     )
 
-# =============================================================================
-# /connect — OAuth авторизация аккаунта
-# =============================================================================
 @dp.message(Command("connect"))
 async def cmd_connect(message: types.Message):
     oauth_url = (
@@ -64,9 +73,6 @@ async def cmd_connect(message: types.Message):
         parse_mode="Markdown"
     )
 
-# =============================================================================
-# /token CODE — обмен кода на access token
-# =============================================================================
 @dp.message(Command("token"))
 async def cmd_token(message: types.Message):
     parts = message.text.split(maxsplit=1)
@@ -98,7 +104,6 @@ async def cmd_token(message: types.Message):
     access_token = data["access_token"]
     open_id      = data["open_id"]
 
-    # Получаем имя аккаунта
     async with aiohttp.ClientSession() as session:
         resp = await session.get(
             "https://open.tiktokapis.com/v2/user/info/?fields=display_name",
@@ -106,20 +111,10 @@ async def cmd_token(message: types.Message):
         )
         user_data = await resp.json()
 
-    display_name = (
-        user_data.get("data", {}).get("user", {}).get("display_name", open_id)
-    )
-
-    accounts[open_id] = {
-        "access_token": access_token,
-        "display_name": display_name
-    }
-
+    display_name = user_data.get("data", {}).get("user", {}).get("display_name", open_id)
+    accounts[open_id] = {"access_token": access_token, "display_name": display_name}
     await message.answer(f"✅ Аккаунт подключён: **{display_name}**", parse_mode="Markdown")
 
-# =============================================================================
-# /accounts — список подключённых аккаунтов
-# =============================================================================
 @dp.message(Command("accounts"))
 async def cmd_accounts(message: types.Message):
     if not accounts:
@@ -130,9 +125,6 @@ async def cmd_accounts(message: types.Message):
         text += f"• {info['display_name']} (`{open_id}`)\n"
     await message.answer(text, parse_mode="Markdown")
 
-# =============================================================================
-# /post — начало публикации
-# =============================================================================
 @dp.message(Command("post"))
 async def cmd_post(message: types.Message, state: FSMContext):
     if not accounts:
@@ -151,7 +143,7 @@ async def got_video(message: types.Message, state: FSMContext):
 async def got_caption(message: types.Message, state: FSMContext):
     await state.update_data(caption=message.text)
     await state.set_state(PostStates.waiting_hashtags)
-    await message.answer("🏷 Напиши хэштеги через пробел (например: #тренд #видео)\nИли отправь — чтобы пропустить")
+    await message.answer("🏷 Напиши хэштеги через пробел\nИли отправь — чтобы пропустить")
 
 @dp.message(PostStates.waiting_hashtags)
 async def got_hashtags(message: types.Message, state: FSMContext):
@@ -159,10 +151,9 @@ async def got_hashtags(message: types.Message, state: FSMContext):
     await state.update_data(hashtags=hashtags)
     await state.set_state(PostStates.waiting_accounts)
 
-    # Показываем кнопки выбора аккаунтов
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text=f"{'✅' if False else '☐'} {info['display_name']}",
+            text=f"☐ {info['display_name']}",
             callback_data=f"acc_{open_id}"
         )]
         for open_id, info in accounts.items()
@@ -184,7 +175,6 @@ async def toggle_account(callback: types.CallbackQuery, state: FSMContext):
 
     await state.update_data(selected_accounts=selected)
 
-    # Обновляем кнопки
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text=f"{'✅' if oid in selected else '☐'} {info['display_name']}",
@@ -208,7 +198,6 @@ async def publish_video(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.answer("⏳ Публикую...")
     await state.clear()
 
-    # Скачиваем видео из Telegram
     file = await bot.get_file(data["file_id"])
     file_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file.file_path}"
 
@@ -225,22 +214,18 @@ async def publish_video(callback: types.CallbackQuery, state: FSMContext):
 
     await callback.message.answer("📊 Результат:\n\n" + "\n".join(results))
 
-# =============================================================================
-# Публикация видео в TikTok
-# =============================================================================
 async def post_to_tiktok(access_token, video_url, title):
     try:
         async with aiohttp.ClientSession() as session:
-            # Инициализируем загрузку
             resp = await session.post(
                 "https://open.tiktokapis.com/v2/post/publish/video/init/",
                 json={
                     "post_info": {
-                        "title":        title[:150],
-                        "privacy_level": "SELF_ONLY",  # для теста — только ты видишь
-                        "disable_duet":  False,
+                        "title":           title[:150],
+                        "privacy_level":   "SELF_ONLY",
+                        "disable_duet":    False,
                         "disable_comment": False,
-                        "disable_stitch": False,
+                        "disable_stitch":  False,
                     },
                     "source_info": {
                         "source":    "PULL_FROM_URL",
@@ -258,14 +243,11 @@ async def post_to_tiktok(access_token, video_url, title):
             return False, str(result.get("error", result))
 
         return True, "опубликовано"
-
     except Exception as e:
         return False, str(e)
 
-# =============================================================================
-# Запуск
-# =============================================================================
 async def main():
+    threading.Thread(target=run_web, daemon=True).start()
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
