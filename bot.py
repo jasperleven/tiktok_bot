@@ -46,10 +46,10 @@ def run_web():
 async def cmd_start(message: types.Message):
     await message.answer(
         "👋 TikTok Auto Poster\n\n"
-        "Команды:\n"
-        "/post — опубликовать видео\n"
-        "/accounts — список подключённых аккаунтов\n"
-        "/connect — подключить новый аккаунт"
+        "Commands:\n"
+        "/post — publish a video\n"
+        "/accounts — list connected accounts\n"
+        "/connect — connect a new TikTok account"
     )
 
 @dp.message(Command("connect"))
@@ -63,11 +63,11 @@ async def cmd_connect(message: types.Message):
         f"&state={message.from_user.id}"
     )
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔗 Авторизовать аккаунт TikTok", url=oauth_url)]
+        [InlineKeyboardButton(text="🔗 Connect TikTok Account", url=oauth_url)]
     ])
     await message.answer(
-        "Нажми кнопку ниже, авторизуйся в TikTok и скопируй код из адресной строки после редиректа.\n"
-        "Затем отправь его сюда командой:\n`/token КОД`",
+        "Click the button below to authorize your TikTok account.\n"
+        "After redirecting, copy the code from the address bar and send it here:\n`/token CODE`",
         reply_markup=keyboard,
         parse_mode="Markdown"
     )
@@ -76,11 +76,11 @@ async def cmd_connect(message: types.Message):
 async def cmd_token(message: types.Message):
     parts = message.text.split(maxsplit=1)
     if len(parts) < 2:
-        await message.answer("Использование: /token КОД")
+        await message.answer("Usage: /token CODE")
         return
 
     code = parts[1].strip()
-    await message.answer("⏳ Получаю токен...")
+    await message.answer("⏳ Getting token...")
 
     async with aiohttp.ClientSession() as session:
         resp = await session.post(
@@ -97,7 +97,7 @@ async def cmd_token(message: types.Message):
         data = await resp.json()
 
     if "access_token" not in data:
-        await message.answer(f"❌ Ошибка: {data}")
+        await message.answer(f"❌ Error: {data}")
         return
 
     access_token = data["access_token"]
@@ -112,14 +112,14 @@ async def cmd_token(message: types.Message):
 
     display_name = user_data.get("data", {}).get("user", {}).get("display_name", open_id)
     accounts[open_id] = {"access_token": access_token, "display_name": display_name}
-    await message.answer(f"✅ Аккаунт подключён: **{display_name}**", parse_mode="Markdown")
+    await message.answer(f"✅ Account connected: **{display_name}**", parse_mode="Markdown")
 
 @dp.message(Command("accounts"))
 async def cmd_accounts(message: types.Message):
     if not accounts:
-        await message.answer("Нет подключённых аккаунтов. Используй /connect")
+        await message.answer("No connected accounts. Use /connect")
         return
-    text = "📋 Подключённые аккаунты:\n\n"
+    text = "📋 Connected accounts:\n\n"
     for open_id, info in accounts.items():
         text += f"• {info['display_name']} (`{open_id}`)\n"
     await message.answer(text, parse_mode="Markdown")
@@ -127,22 +127,22 @@ async def cmd_accounts(message: types.Message):
 @dp.message(Command("post"))
 async def cmd_post(message: types.Message, state: FSMContext):
     if not accounts:
-        await message.answer("Сначала подключи аккаунты через /connect")
+        await message.answer("Please connect an account first using /connect")
         return
     await state.set_state(PostStates.waiting_video)
-    await message.answer("📹 Отправь видео для публикации")
+    await message.answer("📹 Send the video you want to publish")
 
 @dp.message(PostStates.waiting_video, F.video)
 async def got_video(message: types.Message, state: FSMContext):
     await state.update_data(file_id=message.video.file_id)
     await state.set_state(PostStates.waiting_caption)
-    await message.answer("✏️ Напиши описание для видео")
+    await message.answer("✏️ Enter the video caption")
 
 @dp.message(PostStates.waiting_caption)
 async def got_caption(message: types.Message, state: FSMContext):
     await state.update_data(caption=message.text)
     await state.set_state(PostStates.waiting_hashtags)
-    await message.answer("🏷 Напиши хэштеги через пробел\nИли отправь — чтобы пропустить")
+    await message.answer("🏷 Enter hashtags separated by spaces (e.g. #trend #video)\nOr send — to skip")
 
 @dp.message(PostStates.waiting_hashtags)
 async def got_hashtags(message: types.Message, state: FSMContext):
@@ -156,10 +156,10 @@ async def got_hashtags(message: types.Message, state: FSMContext):
             callback_data=f"acc_{open_id}"
         )]
         for open_id, info in accounts.items()
-    ] + [[InlineKeyboardButton(text="🚀 Опубликовать", callback_data="publish")]])
+    ] + [[InlineKeyboardButton(text="🚀 Publish", callback_data="publish")]])
 
     await state.update_data(selected_accounts=[])
-    await message.answer("👤 Выбери аккаунты для публикации:", reply_markup=keyboard)
+    await message.answer("👤 Select accounts to publish to:", reply_markup=keyboard)
 
 @dp.callback_query(F.data.startswith("acc_"))
 async def toggle_account(callback: types.CallbackQuery, state: FSMContext):
@@ -180,7 +180,7 @@ async def toggle_account(callback: types.CallbackQuery, state: FSMContext):
             callback_data=f"acc_{oid}"
         )]
         for oid, info in accounts.items()
-    ] + [[InlineKeyboardButton(text="🚀 Опубликовать", callback_data="publish")]])
+    ] + [[InlineKeyboardButton(text="🚀 Publish", callback_data="publish")]])
 
     await callback.message.edit_reply_markup(reply_markup=keyboard)
     await callback.answer()
@@ -191,10 +191,10 @@ async def publish_video(callback: types.CallbackQuery, state: FSMContext):
     selected = data.get("selected_accounts", [])
 
     if not selected:
-        await callback.answer("Выбери хотя бы один аккаунт!", show_alert=True)
+        await callback.answer("Please select at least one account!", show_alert=True)
         return
 
-    await callback.message.answer("⏳ Публикую...")
+    await callback.message.answer("⏳ Publishing...")
     await state.clear()
 
     caption   = data.get("caption", "")
@@ -208,7 +208,7 @@ async def publish_video(callback: types.CallbackQuery, state: FSMContext):
         status = "✅" if success else "❌"
         results.append(f"{status} {acc['display_name']}: {msg}")
 
-    await callback.message.answer("📊 Результат:\n\n" + "\n".join(results))
+    await callback.message.answer("📊 Result:\n\n" + "\n".join(results))
 
 async def post_to_tiktok(access_token, file_id, title):
     try:
@@ -216,13 +216,11 @@ async def post_to_tiktok(access_token, file_id, title):
         file_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file.file_path}"
 
         async with aiohttp.ClientSession() as session:
-            # Скачиваем видео из Telegram
             async with session.get(file_url) as resp:
                 video_bytes = await resp.read()
 
             file_size = len(video_bytes)
 
-            # Шаг 1: Инициализация загрузки
             init_resp = await session.post(
                 'https://open.tiktokapis.com/v2/post/publish/video/init/',
                 json={
@@ -253,7 +251,6 @@ async def post_to_tiktok(access_token, file_id, title):
             upload_url = init_data['data']['upload_url']
             publish_id = init_data['data']['publish_id']
 
-            # Шаг 2: Загружаем файл
             upload_resp = await session.put(
                 upload_url,
                 data=video_bytes,
@@ -267,7 +264,7 @@ async def post_to_tiktok(access_token, file_id, title):
             if upload_resp.status not in [200, 201, 206]:
                 return False, f'Upload failed: {upload_resp.status}'
 
-            return True, f'опубликовано (publish_id: {publish_id})'
+            return True, f'published (publish_id: {publish_id})'
 
     except Exception as e:
         return False, str(e)
