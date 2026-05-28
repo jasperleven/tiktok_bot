@@ -29,7 +29,6 @@ class PostStates(StatesGroup):
     waiting_hashtags = State()
     waiting_accounts = State()
 
-# Простой веб-сервер для Render
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -198,9 +197,6 @@ async def publish_video(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.answer("⏳ Публикую...")
     await state.clear()
 
-    file = await bot.get_file(data["file_id"])
-    file_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file.file_path}"
-
     caption   = data.get("caption", "")
     hashtags  = data.get("hashtags", "")
     full_text = f"{caption}\n{hashtags}".strip()
@@ -208,41 +204,71 @@ async def publish_video(callback: types.CallbackQuery, state: FSMContext):
     results = []
     for open_id in selected:
         acc = accounts[open_id]
-        success, msg = await post_to_tiktok(acc["access_token"], file_url, full_text)
+        success, msg = await post_to_tiktok(acc["access_token"], data["file_id"], full_text)
         status = "✅" if success else "❌"
         results.append(f"{status} {acc['display_name']}: {msg}")
 
     await callback.message.answer("📊 Результат:\n\n" + "\n".join(results))
 
-async def post_to_tiktok(access_token, video_url, title):
+async def post_to_tiktok(access_token, file_id, title):
     try:
+        file = await bot.get_file(file_id)
+        file_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file.file_path}"
+
         async with aiohttp.ClientSession() as session:
-            resp = await session.post(
-                "https://open.tiktokapis.com/v2/post/publish/video/init/",
+            # Скачиваем видео из Telegram
+            async with session.get(file_url) as resp:
+                video_bytes = await resp.read()
+
+            file_size = len(video_bytes)
+
+            # Шаг 1: Инициализация загрузки
+            init_resp = await session.post(
+                'https://open.tiktokapis.com/v2/post/publish/video/init/',
                 json={
-                    "post_info": {
-                        "title":           title[:150],
-                        "privacy_level":   "SELF_ONLY",
-                        "disable_duet":    False,
-                        "disable_comment": False,
-                        "disable_stitch":  False,
+                    'post_info': {
+                        'title':             title[:150],
+                        'privacy_level':     'SELF_ONLY',
+                        'disable_duet':      False,
+                        'disable_comment':   False,
+                        'disable_stitch':    False,
                     },
-                    "source_info": {
-                        "source":    "PULL_FROM_URL",
-                        "video_url": video_url,
+                    'source_info': {
+                        'source':            'FILE_UPLOAD',
+                        'video_size':        file_size,
+                        'chunk_size':        file_size,
+                        'total_chunk_count': 1
                     }
                 },
                 headers={
-                    "Authorization": f"Bearer {access_token}",
-                    "Content-Type":  "application/json"
+                    'Authorization': f'Bearer {access_token}',
+                    'Content-Type':  'application/json'
                 }
             )
-            result = await resp.json()
+            init_data = await init_resp.json()
 
-        if result.get("error", {}).get("code") != "ok":
-            return False, str(result.get("error", result))
+            if init_data.get('error', {}).get('code') != 'ok':
+                return False, str(init_data.get('error', init_data))
 
-        return True, "опубликовано"
+            upload_url = init_data['data']['upload_url']
+            publish_id = init_data['data']['publish_id']
+
+            # Шаг 2: Загружаем файл
+            upload_resp = await session.put(
+                upload_url,
+                data=video_bytes,
+                headers={
+                    'Content-Type':   'video/mp4',
+                    'Content-Range':  f'bytes 0-{file_size-1}/{file_size}',
+                    'Content-Length': str(file_size)
+                }
+            )
+
+            if upload_resp.status not in [200, 201, 206]:
+                return False, f'Upload failed: {upload_resp.status}'
+
+            return True, f'опубликовано (publish_id: {publish_id})'
+
     except Exception as e:
         return False, str(e)
 
