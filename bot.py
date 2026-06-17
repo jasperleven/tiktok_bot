@@ -138,6 +138,34 @@ async def cmd_accounts(message: types.Message):
         text += f"• {info['display_name']} (`{open_id}`)\n"
     await message.answer(text, parse_mode="Markdown")
 
+@dp.message(Command("status"))
+async def cmd_status(message: types.Message):
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2:
+        await message.answer("Usage: /status PUBLISH_ID")
+        return
+
+    publish_id = parts[1].strip()
+
+    if not accounts:
+        await message.answer("No connected accounts.")
+        return
+
+    access_token = list(accounts.values())[0]["access_token"]
+
+    async with aiohttp.ClientSession() as session:
+        resp = await session.post(
+            "https://open.tiktokapis.com/v2/post/publish/status/fetch/",
+            json={"publish_id": publish_id},
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json"
+            }
+        )
+        data = await resp.json()
+
+    await message.answer(f"📊 Status:\n`{json.dumps(data, indent=2)}`", parse_mode="Markdown")
+
 @dp.message(Command("post"))
 async def cmd_post(message: types.Message, state: FSMContext):
     if not accounts:
@@ -248,7 +276,7 @@ async def post_to_tiktok(access_token, file_id, title):
                 json={
                     'post_info': {
                         'title':             title[:150],
-                        'privacy_level':     'PUBLIC_TO_EVERYONE',
+                        'privacy_level':     'SELF_ONLY',
                         'disable_duet':      False,
                         'disable_comment':   False,
                         'disable_stitch':    False,
