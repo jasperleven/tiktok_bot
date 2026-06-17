@@ -1,277 +1,215 @@
-import asyncio
 import os
+import json
+import logging
 import threading
-import aiohttp
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import Command
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
-from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from dotenv import load_dotenv
+from datetime import datetime, timedelta
+import asyncio
+import pytz
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from telegram import Update, Bot
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+import gspread
+from google.oauth2.service_account import Credentials
 
-load_dotenv()
+logging.basicConfig(level=logging.INFO)
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-TIKTOK_CLIENT_KEY = os.getenv("TIKTOK_CLIENT_KEY")
-TIKTOK_CLIENT_SECRET = os.getenv("TIKTOK_CLIENT_SECRET")
-TIKTOK_REDIRECT_URI = os.getenv("TIKTOK_REDIRECT_URI")
+TOKEN = os.environ.get("BOT_TOKEN")
+CHAT_ID = os.environ.get("CHAT_ID")
+SHEET_ID = "1JXhy8umRsU8UCxdPEKvd-suXb6Hcrfh0_Z_wEoGUG_k"
 
-bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher(storage=MemoryStorage())
+GOOGLE_CREDS = {
+    "type": "service_account",
+    "project_id": "lively-welder-480714-h9",
+    "private_key_id": "317763c1365925cff1c8d309099701df70164154",
+    "private_key": os.environ.get("GOOGLE_PRIVATE_KEY", "").replace("\\n", "\n"),
+    "client_email": "birthday-bot@lively-welder-480714-h9.iam.gserviceaccount.com",
+    "client_id": "114057745621034407943",
+    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+    "token_uri": "https://oauth2.googleapis.com/token",
+    "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+    "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/birthday-bot%40lively-welder-480714-h9.iam.gserviceaccount.com",
+    "universe_domain": "googleapis.com"
+}
 
-accounts = {}
 
-class PostStates(StatesGroup):
-    waiting_video    = State()
-    waiting_caption  = State()
-    waiting_hashtags = State()
-    waiting_accounts = State()
+def get_sheet():
+    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+    creds = Credentials.from_service_account_info(GOOGLE_CREDS, scopes=scopes)
+    client = gspread.authorize(creds)
+    sheet = client.open_by_key(SHEET_ID).sheet1
+    return sheet
 
-class HealthHandler(BaseHTTPRequestHandler):
+
+def load_birthdays():
+    try:
+        sheet = get_sheet()
+        records = sheet.get_all_values()
+        birthdays = {}
+        for row in records:
+            if len(row) >= 2 and row[0] and row[1]:
+                birthdays[row[0]] = row[1]
+        return birthdays
+    except Exception as e:
+        logging.error(f"Ошибка загрузки из Sheets: {e}")
+        return {}
+
+
+def save_birthdays(birthdays):
+    try:
+        sheet = get_sheet()
+        sheet.clear()
+        rows = [[name, date] for name, date in birthdays.items()]
+        if rows:
+            sheet.update(rows, "A1")
+    except Exception as e:
+        logging.error(f"Ошибка сохранения в Sheets: {e}")
+
+
+def get_todays_birthdays():
+    birthdays = load_birthdays()
+    today = datetime.now().strftime("%d.%m")
+    celebrants = [name for name, date in birthdays.items() if date == today]
+    if celebrants:
+        names = ", ".join(celebrants)
+        return f"🎂 Сегодня день рождения: {names}! Не забудьте поздравить! 🎉"
+    return None
+
+
+class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"OK")
+        self.wfile.write(b"Bot is running")
     def log_message(self, format, *args):
         pass
 
-def run_web():
+def run_server():
     port = int(os.environ.get("PORT", 8080))
-    server = HTTPServer(("0.0.0.0", port), HealthHandler)
+    server = HTTPServer(("0.0.0.0", port), Handler)
     server.serve_forever()
 
-@dp.message(Command("start"))
-async def cmd_start(message: types.Message):
-    await message.answer(
-        "👋 TikTok Auto Poster\n\n"
-        "Commands:\n"
-        "/post — publish a video\n"
-        "/accounts — list connected accounts\n"
-        "/connect — connect a new TikTok account"
-    )
 
-@dp.message(Command("connect"))
-async def cmd_connect(message: types.Message):
-    oauth_url = (
-        f"https://www.tiktok.com/v2/auth/authorize/"
-        f"?client_key={TIKTOK_CLIENT_KEY}"
-        f"&scope=user.info.basic,video.publish,video.upload"
-        f"&response_type=code"
-        f"&redirect_uri={TIKTOK_REDIRECT_URI}"
-        f"&state={message.from_user.id}"
-    )
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔗 Connect TikTok Account", url=oauth_url)]
-    ])
-    await message.answer(
-        "Click the button below to authorize your TikTok account.\n"
-        "After redirecting, copy the code from the address bar and send it here:\n`/token CODE`",
-        reply_markup=keyboard,
-        parse_mode="Markdown"
-    )
-
-@dp.message(Command("token"))
-async def cmd_token(message: types.Message):
-    parts = message.text.split(maxsplit=1)
-    if len(parts) < 2:
-        await message.answer("Usage: /token CODE")
-        return
-
-    code = parts[1].strip()
-    await message.answer("⏳ Getting token...")
-
-    async with aiohttp.ClientSession() as session:
-        resp = await session.post(
-            "https://open.tiktokapis.com/v2/oauth/token/",
-            data={
-                "client_key":     TIKTOK_CLIENT_KEY,
-                "client_secret":  TIKTOK_CLIENT_SECRET,
-                "code":           code,
-                "grant_type":     "authorization_code",
-                "redirect_uri":   TIKTOK_REDIRECT_URI,
-            },
-            headers={"Content-Type": "application/x-www-form-urlencoded"}
-        )
-        data = await resp.json()
-
-    if "access_token" not in data:
-        await message.answer(f"❌ Error: {data}")
-        return
-
-    access_token = data["access_token"]
-    open_id      = data["open_id"]
-
-    async with aiohttp.ClientSession() as session:
-        resp = await session.get(
-            "https://open.tiktokapis.com/v2/user/info/?fields=display_name",
-            headers={"Authorization": f"Bearer {access_token}"}
-        )
-        user_data = await resp.json()
-
-    display_name = user_data.get("data", {}).get("user", {}).get("display_name", open_id)
-    accounts[open_id] = {"access_token": access_token, "display_name": display_name}
-    await message.answer(f"✅ Account connected: **{display_name}**", parse_mode="Markdown")
-
-@dp.message(Command("accounts"))
-async def cmd_accounts(message: types.Message):
-    if not accounts:
-        await message.answer("No connected accounts. Use /connect")
-        return
-    text = "📋 Connected accounts:\n\n"
-    for open_id, info in accounts.items():
-        text += f"• {info['display_name']} (`{open_id}`)\n"
-    await message.answer(text, parse_mode="Markdown")
-
-@dp.message(Command("post"))
-async def cmd_post(message: types.Message, state: FSMContext):
-    if not accounts:
-        await message.answer("Please connect an account first using /connect")
-        return
-    await state.set_state(PostStates.waiting_video)
-    await message.answer("📹 Send the video you want to publish")
-
-@dp.message(PostStates.waiting_video, F.video)
-async def got_video(message: types.Message, state: FSMContext):
-    await state.update_data(file_id=message.video.file_id)
-    await state.set_state(PostStates.waiting_caption)
-    await message.answer("✏️ Enter the video caption")
-
-@dp.message(PostStates.waiting_caption)
-async def got_caption(message: types.Message, state: FSMContext):
-    await state.update_data(caption=message.text)
-    await state.set_state(PostStates.waiting_hashtags)
-    await message.answer("🏷 Enter hashtags separated by spaces (e.g. #trend #video)\nOr send — to skip")
-
-@dp.message(PostStates.waiting_hashtags)
-async def got_hashtags(message: types.Message, state: FSMContext):
-    hashtags = "" if message.text == "—" else message.text
-    await state.update_data(hashtags=hashtags)
-    await state.set_state(PostStates.waiting_accounts)
-
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text=f"☐ {info['display_name']}",
-            callback_data=f"acc_{open_id}"
-        )]
-        for open_id, info in accounts.items()
-    ] + [[InlineKeyboardButton(text="🚀 Publish", callback_data="publish")]])
-
-    await state.update_data(selected_accounts=[])
-    await message.answer("👤 Select accounts to publish to:", reply_markup=keyboard)
-
-@dp.callback_query(F.data.startswith("acc_"))
-async def toggle_account(callback: types.CallbackQuery, state: FSMContext):
-    open_id = callback.data.replace("acc_", "")
-    data = await state.get_data()
-    selected = data.get("selected_accounts", [])
-
-    if open_id in selected:
-        selected.remove(open_id)
+async def send_daily_notification():
+    bot = Bot(token=TOKEN)
+    result = get_todays_birthdays()
+    if result:
+        await bot.send_message(chat_id=CHAT_ID, text=result)
     else:
-        selected.append(open_id)
+        await bot.send_message(chat_id=CHAT_ID, text="Сегодня дней рождения нет 🙂")
 
-    await state.update_data(selected_accounts=selected)
 
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text=f"{'✅' if oid in selected else '☐'} {info['display_name']}",
-            callback_data=f"acc_{oid}"
-        )]
-        for oid, info in accounts.items()
-    ] + [[InlineKeyboardButton(text="🚀 Publish", callback_data="publish")]])
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = (
+        "👋 Привет! Я бот-напоминалка о днях рождения.\n\n"
+        "Команды:\n"
+        "/add — добавить дни рождения\n"
+        "/list — показать всех\n"
+        "/delete Имя — удалить\n"
+        "/check — проверить сегодняшние ДР\n\n"
+        "Формат добавления:\n"
+        "/add Мама 15.03, Папа 22.07, Сестра 01.01\n\n"
+        "Автоматические уведомления приходят каждый день в 9:00 по Минску."
+    )
+    await update.message.reply_text(text)
 
-    await callback.message.edit_reply_markup(reply_markup=keyboard)
-    await callback.answer()
 
-@dp.callback_query(F.data == "publish")
-async def publish_video(callback: types.CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    selected = data.get("selected_accounts", [])
+async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message = update.message.text.strip()
+    text = message[4:].strip()
 
-    if not selected:
-        await callback.answer("Please select at least one account!", show_alert=True)
+    if not text:
+        await update.message.reply_text(
+            "Укажите имена и даты:\n/add Мама 15.03, Папа 22.07, Сестра 01.01"
+        )
         return
 
-    await callback.message.answer("⏳ Publishing...")
-    await state.clear()
+    entries = [e.strip() for e in text.split(",") if e.strip()]
+    birthdays = load_birthdays()
+    added = []
+    errors = []
 
-    caption   = data.get("caption", "")
-    hashtags  = data.get("hashtags", "")
-    full_text = f"{caption}\n{hashtags}".strip()
+    for entry in entries:
+        parts = entry.rsplit(" ", 1)
+        if len(parts) != 2:
+            errors.append(f"❌ Не понял: {entry}")
+            continue
+        name, date = parts
+        try:
+            datetime.strptime(date.strip(), "%d.%m")
+            birthdays[name.strip()] = date.strip()
+            added.append(f"✅ {name.strip()} — {date.strip()}")
+        except ValueError:
+            errors.append(f"❌ Неверная дата: {entry} (нужен формат ДД.ММ)")
 
-    results = []
-    for open_id in selected:
-        acc = accounts[open_id]
-        success, msg = await post_to_tiktok(acc["access_token"], data["file_id"], full_text)
-        status = "✅" if success else "❌"
-        results.append(f"{status} {acc['display_name']}: {msg}")
+    save_birthdays(birthdays)
 
-    await callback.message.answer("📊 Result:\n\n" + "\n".join(results))
+    result = ""
+    if added:
+        result += "Добавлено:\n" + "\n".join(added)
+    if errors:
+        result += "\n\nОшибки:\n" + "\n".join(errors)
 
-async def post_to_tiktok(access_token, file_id, title):
-    try:
-        file = await bot.get_file(file_id)
-        file_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file.file_path}"
+    await update.message.reply_text(result)
 
-        async with aiohttp.ClientSession() as session:
-            async with session.get(file_url) as resp:
-                video_bytes = await resp.read()
 
-            file_size = len(video_bytes)
+async def list_birthdays(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    birthdays = load_birthdays()
+    if not birthdays:
+        await update.message.reply_text("Список пуст. Добавьте через /add")
+        return
 
-            init_resp = await session.post(
-                'https://open.tiktokapis.com/v2/post/publish/video/init/',
-                json={
-                    'post_info': {
-                        'title':             title[:150],
-                        'privacy_level':     'SELF_ONLY',
-                        'disable_duet':      False,
-                        'disable_comment':   False,
-                        'disable_stitch':    False,
-                    },
-                    'source_info': {
-                        'source':            'FILE_UPLOAD',
-                        'video_size':        file_size,
-                        'chunk_size':        file_size,
-                        'total_chunk_count': 1
-                    }
-                },
-                headers={
-                    'Authorization': f'Bearer {access_token}',
-                    'Content-Type':  'application/json'
-                }
-            )
-            init_data = await init_resp.json()
+    sorted_b = sorted(birthdays.items(), key=lambda x: datetime.strptime(x[1], "%d.%m").replace(year=2000))
+    text = "🎂 Дни рождения:\n\n"
+    for name, date in sorted_b:
+        text += f"{date} — {name}\n"
+    await update.message.reply_text(text)
 
-            if init_data.get('error', {}).get('code') != 'ok':
-                return False, str(init_data.get('error', init_data))
 
-            upload_url = init_data['data']['upload_url']
-            publish_id = init_data['data']['publish_id']
+async def delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("Укажите имя: /delete Мама")
+        return
 
-            upload_resp = await session.put(
-                upload_url,
-                data=video_bytes,
-                headers={
-                    'Content-Type':   'video/mp4',
-                    'Content-Range':  f'bytes 0-{file_size-1}/{file_size}',
-                    'Content-Length': str(file_size)
-                }
-            )
+    name = " ".join(context.args)
+    birthdays = load_birthdays()
 
-            if upload_resp.status not in [200, 201, 206]:
-                return False, f'Upload failed: {upload_resp.status}'
+    if name in birthdays:
+        del birthdays[name]
+        save_birthdays(birthdays)
+        await update.message.reply_text(f"✅ {name} удалён")
+    else:
+        await update.message.reply_text(f"❌ {name} не найден в списке")
 
-            return True, f'published (publish_id: {publish_id})'
 
-    except Exception as e:
-        return False, str(e)
+async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    result = get_todays_birthdays()
+    if result:
+        await update.message.reply_text(result)
+    else:
+        await update.message.reply_text("Сегодня дней рождения нет 🙂")
+
 
 async def main():
-    threading.Thread(target=run_web, daemon=True).start()
-    await dp.start_polling(bot)
+    scheduler = AsyncIOScheduler(timezone="Europe/Minsk")
+    scheduler.add_job(send_daily_notification, 'cron', hour=10, minute=0)
+    scheduler.start()
+
+    app = ApplicationBuilder().token(TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("add", add))
+    app.add_handler(CommandHandler("list", list_birthdays))
+    app.add_handler(CommandHandler("delete", delete))
+    app.add_handler(CommandHandler("check", check))
+
+    await app.initialize()
+    await app.start()
+    await app.updater.start_polling()
+
+    await asyncio.Event().wait()
+
 
 if __name__ == "__main__":
+    t = threading.Thread(target=run_server, daemon=True)
+    t.start()
     asyncio.run(main())
