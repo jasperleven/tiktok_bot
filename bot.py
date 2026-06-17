@@ -3,6 +3,7 @@ import os
 import json
 import threading
 import aiohttp
+from urllib.parse import urlparse, parse_qs
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
@@ -27,13 +28,12 @@ def load_accounts():
             return json.load(f)
     return {}
 
-def save_accounts(accounts):
+def save_accounts(accs):
     with open(ACCOUNTS_FILE, "w") as f:
-        json.dump(accounts, f)
+        json.dump(accs, f)
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
-
 accounts = load_accounts()
 
 class PostStates(StatesGroup):
@@ -42,17 +42,66 @@ class PostStates(StatesGroup):
     waiting_hashtags = State()
     waiting_accounts = State()
 
-class HealthHandler(BaseHTTPRequestHandler):
+async def exchange_code(code, telegram_user_id):
+    async with aiohttp.ClientSession() as session:
+        resp = await session.post(
+            "https://open.tiktokapis.com/v2/oauth/token/",
+            data={
+                "client_key":    TIKTOK_CLIENT_KEY,
+                "client_secret": TIKTOK_CLIENT_SECRET,
+                "code":          code,
+                "grant_type":    "authorization_code",
+                "redirect_uri":  TIKTOK_REDIRECT_URI,
+            },
+            headers={"Content-Type": "application/x-www-form-urlencoded"}
+        )
+        data = await resp.json()
+
+    if "access_token" not in data:
+        await bot.send_message(telegram_user_id, f"❌ Auth error: {data}")
+        return
+
+    access_token = data["access_token"]
+    open_id = data["open_id"]
+
+    async with aiohttp.ClientSession() as session:
+        resp = await session.get(
+            "https://open.tiktokapis.com/v2/user/info/?fields=display_name",
+            headers={"Authorization": f"Bearer {access_token}"}
+        )
+        user_data = await resp.json()
+
+    display_name = user_data.get("data", {}).get("user", {}).get("display_name", open_id)
+    accounts[open_id] = {"access_token": access_token, "display_name": display_name}
+    save_accounts(accounts)
+    await bot.send_message(telegram_user_id, f"✅ Account connected: *{display_name}*", parse_mode="Markdown")
+
+class CallbackHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"OK")
+        parsed = urlparse(self.path)
+        params = parse_qs(parsed.query)
+
+        if parsed.path == "/callback" and "code" in params and "state" in params:
+            code = params["code"][0]
+            telegram_user_id = int(params["state"][0])
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"<html><body><h2>Authorization successful!</h2><p>You can close this tab and return to Telegram.</p></body></html>")
+            asyncio.run_coroutine_threadsafe(
+                exchange_code(code, telegram_user_id),
+                loop
+            )
+        else:
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"OK")
+
     def log_message(self, format, *args):
         pass
 
 def run_web():
     port = int(os.environ.get("PORT", 8080))
-    server = HTTPServer(("0.0.0.0", port), HealthHandler)
+    server = HTTPServer(("0.0.0.0", port), CallbackHandler)
     server.serve_forever()
 
 @dp.message(Command("start"))
@@ -80,53 +129,9 @@ async def cmd_connect(message: types.Message):
     ])
     await message.answer(
         "Click the button below to authorize your TikTok account.\n"
-        "After redirecting, copy the code from the address bar and send it here:\n`/token CODE`",
-        reply_markup=keyboard,
-        parse_mode="Markdown"
+        "After authorization you will be redirected automatically — no need to copy anything!",
+        reply_markup=keyboard
     )
-
-@dp.message(Command("token"))
-async def cmd_token(message: types.Message):
-    parts = message.text.split(maxsplit=1)
-    if len(parts) < 2:
-        await message.answer("Usage: /token CODE")
-        return
-
-    code = parts[1].strip()
-    await message.answer("⏳ Getting token...")
-
-    async with aiohttp.ClientSession() as session:
-        resp = await session.post(
-            "https://open.tiktokapis.com/v2/oauth/token/",
-            data={
-                "client_key":     TIKTOK_CLIENT_KEY,
-                "client_secret":  TIKTOK_CLIENT_SECRET,
-                "code":           code,
-                "grant_type":     "authorization_code",
-                "redirect_uri":   TIKTOK_REDIRECT_URI,
-            },
-            headers={"Content-Type": "application/x-www-form-urlencoded"}
-        )
-        data = await resp.json()
-
-    if "access_token" not in data:
-        await message.answer(f"❌ Error: {data}")
-        return
-
-    access_token = data["access_token"]
-    open_id      = data["open_id"]
-
-    async with aiohttp.ClientSession() as session:
-        resp = await session.get(
-            "https://open.tiktokapis.com/v2/user/info/?fields=display_name",
-            headers={"Authorization": f"Bearer {access_token}"}
-        )
-        user_data = await resp.json()
-
-    display_name = user_data.get("data", {}).get("user", {}).get("display_name", open_id)
-    accounts[open_id] = {"access_token": access_token, "display_name": display_name}
-    save_accounts(accounts)
-    await message.answer(f"✅ Account connected: *{display_name}*", parse_mode="Markdown")
 
 @dp.message(Command("accounts"))
 async def cmd_accounts(message: types.Message):
@@ -146,7 +151,6 @@ async def cmd_status(message: types.Message):
         return
 
     publish_id = parts[1].strip()
-
     if not accounts:
         await message.answer("No connected accounts.")
         return
@@ -172,13 +176,17 @@ async def cmd_post(message: types.Message, state: FSMContext):
         await message.answer("Please connect an account first using /connect")
         return
     await state.set_state(PostStates.waiting_video)
-    await message.answer("📹 Send the video you want to publish")
+    await message.answer("📹 Send the video as a file (document)")
 
-@dp.message(PostStates.waiting_video, F.video)
+@dp.message(PostStates.waiting_video, F.document)
 async def got_video(message: types.Message, state: FSMContext):
-    await state.update_data(file_id=message.video.file_id)
+    await state.update_data(file_id=message.document.file_id)
     await state.set_state(PostStates.waiting_caption)
     await message.answer("✏️ Enter the video caption")
+
+@dp.message(PostStates.waiting_video, F.video)
+async def got_video_compressed(message: types.Message, state: FSMContext):
+    await message.answer("⚠️ Please send the video as a *file* (document), not as a video — to avoid compression.\nTap the paperclip → File.", parse_mode="Markdown")
 
 @dp.message(PostStates.waiting_caption)
 async def got_caption(message: types.Message, state: FSMContext):
@@ -275,11 +283,11 @@ async def post_to_tiktok(access_token, file_id, title):
                 'https://open.tiktokapis.com/v2/post/publish/video/init/',
                 json={
                     'post_info': {
-                        'title':             title[:150],
-                        'privacy_level':     'SELF_ONLY',
-                        'disable_duet':      False,
-                        'disable_comment':   False,
-                        'disable_stitch':    False,
+                        'title':           title[:150],
+                        'privacy_level':   'SELF_ONLY',
+                        'disable_duet':    False,
+                        'disable_comment': False,
+                        'disable_stitch':  False,
                     },
                     'source_info': {
                         'source':            'FILE_UPLOAD',
@@ -319,7 +327,11 @@ async def post_to_tiktok(access_token, file_id, title):
     except Exception as e:
         return False, str(e)
 
+loop = None
+
 async def main():
+    global loop
+    loop = asyncio.get_event_loop()
     threading.Thread(target=run_web, daemon=True).start()
     await dp.start_polling(bot)
 
