@@ -179,14 +179,16 @@ async def cmd_post(message: types.Message, state: FSMContext):
     await message.answer("📹 Send the video as a file (document)")
 
 @dp.message(PostStates.waiting_video, F.document)
-async def got_video(message: types.Message, state: FSMContext):
+async def got_video_doc(message: types.Message, state: FSMContext):
     await state.update_data(file_id=message.document.file_id)
     await state.set_state(PostStates.waiting_caption)
     await message.answer("✏️ Enter the video caption")
 
 @dp.message(PostStates.waiting_video, F.video)
-async def got_video_compressed(message: types.Message, state: FSMContext):
-    await message.answer("⚠️ Please send the video as a *file* (document), not as a video — to avoid compression.\nTap the paperclip → File.", parse_mode="Markdown")
+async def got_video(message: types.Message, state: FSMContext):
+    await state.update_data(file_id=message.video.file_id)
+    await state.set_state(PostStates.waiting_caption)
+    await message.answer("✏️ Enter the video caption")
 
 @dp.message(PostStates.waiting_caption)
 async def got_caption(message: types.Message, state: FSMContext):
