@@ -41,6 +41,7 @@ class PostStates(StatesGroup):
     waiting_caption  = State()
     waiting_hashtags = State()
     waiting_accounts = State()
+    waiting_code     = State()
 
 async def exchange_code(code, telegram_user_id):
     async with aiohttp.ClientSession() as session:
@@ -115,7 +116,7 @@ async def cmd_start(message: types.Message):
     )
 
 @dp.message(Command("connect"))
-async def cmd_connect(message: types.Message):
+async def cmd_connect(message: types.Message, state: FSMContext):
     oauth_url = (
         f"https://www.tiktok.com/v2/auth/authorize/"
         f"?client_key={TIKTOK_CLIENT_KEY}"
@@ -127,11 +128,32 @@ async def cmd_connect(message: types.Message):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔗 Connect TikTok Account", url=oauth_url)]
     ])
+    await state.set_state(PostStates.waiting_code)
     await message.answer(
-        "Click the button below to authorize your TikTok account.\n"
-        "After authorization you will be redirected automatically — no need to copy anything!",
+        "1. Click the button below to authorize\n"
+        "2. After redirect copy the full URL from browser\n"
+        "3. Send it here",
         reply_markup=keyboard
     )
+
+@dp.message(PostStates.waiting_code)
+async def got_code(message: types.Message, state: FSMContext):
+    text = message.text.strip()
+    # Extract code from URL if full URL was sent
+    if "code=" in text:
+        import re
+        match = re.search(r'code=([^&\s]+)', text)
+        if match:
+            code = match.group(1)
+        else:
+            await message.answer("❌ Could not extract code. Try again.")
+            return
+    else:
+        code = text
+
+    await state.clear()
+    await message.answer("⏳ Getting token...")
+    await exchange_code(code, message.from_user.id)
 
 @dp.message(Command("accounts"))
 async def cmd_accounts(message: types.Message):
