@@ -17,23 +17,51 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 MARKETING_TOKEN = os.getenv("TIKTOK_MARKETING_TOKEN")
 
-ADVERTISER_IDS = [
-    "7379547391218696193","7380323349555413008","7390291557712298001",
-    "7441163654311165969","7458571671717429249","7467552788675854353",
-    "7467552998789578768","7467553177400147985","7467553366952935441",
-    "7467553550734901264","7470066457113083905","7473561071866134529",
-    "7481290249352642576","7496487210787717138","7505007920823107591",
-    "7505007952001253377","7505009554032345096","7522063277921288200",
-    "7525368248519507975","7525370413484867592","7594384691119734801",
-    "7608919922311331856","7610323536325902352","7610323651145269264",
-    "7610324072874049553","7628935051379752978","7632400068336500737",
-    "7636704658911805460","7636704984830230548","7636706608449617941",
-    "7636707477756805141","7636707899250655252","7636708554946248725",
-    "7636708691615268884","7636708912552493076","7636709412069179412",
-    "7636710982693470229","7643732056840765457","7647080900043505684",
-    "7647081382459670549","7652299468439765012","7652299641001787412",
-    "7652299857702961172"
-]
+ADVERTISERS = {
+    "7379547391218696193": "AM_2_dverirb.online",
+    "7380323349555413008": "#245 TikTok Boost Ads I Vlad RB",
+    "7390291557712298001": "AM_2_Стиралки/холодильники",
+    "7441163654311165969": "AM_3_technowave-ad10",
+    "7458571671717429249": "#245 TikTok Boost I Vlad RB",
+    "7467552788675854353": "ITB_Vlad_moto",
+    "7467552998789578768": "ITB_Vlad_tractor",
+    "7467553177400147985": "ITB_Vlad_moped",
+    "7467553366952935441": "ITB_Vlad_scuter",
+    "7467553550734901264": "ITB_Vlad_lodki",
+    "7470066457113083905": "AM_3_technowave-ad22",
+    "7473561071866134529": "WGC-M-S-technowave-ad37",
+    "7481290249352642576": "WGC-M-S-mega-techno-4",
+    "7496487210787717138": "WGC-M-S-online-saletech",
+    "7505007920823107591": "WGC-M-S-cool-by-shop-xyz",
+    "7505007952001253377": "WGC-M-S-cool-by-shoptechh",
+    "7505009554032345096": "WGC-M-S-cool-shop-by-online",
+    "7522063277921288200": "WGC-M-S-alfa-shopxyz",
+    "7525368248519507975": "WGC-M-S-techshop-onlineonline",
+    "7525370413484867592": "WGC-M-S-techshop-online-tech",
+    "7594384691119734801": "WGC-M-S-dacha-shop.xyz2",
+    "7608919922311331856": "WGC-M-S-dacha",
+    "7610323536325902352": "WGC-M-S-dacha-shop-1",
+    "7610323651145269264": "WGC-M-S-dacha-shop-2",
+    "7610324072874049553": "WGC-M-S-dacha-shop-4",
+    "7628935051379752978": "WGC-M-S-dacha-shop.xyz1",
+    "7632400068336500737": "TechnoWave",
+    "7636704658911805460": "WGC-M-S-cool-shopby-2",
+    "7636704984830230548": "WGC-M-S-cool-shop-1",
+    "7636706608449617941": "WGC-M-S-cool-shop-3",
+    "7636707477756805141": "WGC-M-S-cool-shop-4",
+    "7636707899250655252": "WGC-M-S-cool-shop-5",
+    "7636708554946248725": "WGC-M-S-cool-shop-6",
+    "7636708691615268884": "WGC-M-S-cool-shop-7",
+    "7636708912552493076": "WGC-M-S-cool-shop-8",
+    "7636709412069179412": "WGC-M-S-cool-shop-9",
+    "7636710982693470229": "WGC-M-S-cool-shop-10",
+    "7643732056840765457": "Artaged_BC_VLD",
+    "7647080900043505684": "WGC-M-S-cool-shop-11",
+    "7647081382459670549": "WGC-M-S-cool-shop-12",
+    "7652299468439765012": "WGC-M-S-cool-shop-13",
+    "7652299641001787412": "WGC-M-S-cool-shop-14",
+    "7652299857702961172": "WGC-M-S-cool-shop-15",
+}
 
 OBJECTIVES = {
     "🎯 Охват (Reach)": "REACH",
@@ -63,6 +91,7 @@ dp = Dispatcher(storage=MemoryStorage())
 class CampaignStates(StatesGroup):
     campaign_name      = State()
     campaign_objective = State()
+    budget_level       = State()
     budget_mode        = State()
     budget_amount      = State()
     adgroup_name       = State()
@@ -70,6 +99,8 @@ class CampaignStates(StatesGroup):
     geo                = State()
     schedule_start     = State()
     schedule_end       = State()
+    bid_type           = State()
+    bid_amount         = State()
     video_upload       = State()
     ad_text            = State()
     ad_url             = State()
@@ -88,12 +119,24 @@ def run_web():
     server = HTTPServer(("0.0.0.0", port), HealthHandler)
     server.serve_forever()
 
+def build_advertisers_keyboard(selected):
+    rows = []
+    for adv_id, name in ADVERTISERS.items():
+        mark = "✅" if adv_id in selected else "☐"
+        rows.append([InlineKeyboardButton(text=f"{mark} {name}", callback_data=f"adv_{adv_id}")])
+    rows.append([
+        InlineKeyboardButton(text="✅ Выбрать все", callback_data="adv_all"),
+        InlineKeyboardButton(text="❌ Снять все", callback_data="adv_none"),
+    ])
+    rows.append([InlineKeyboardButton(text="🚀 Создать кампанию", callback_data="create_campaign")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     await message.answer(
         "👋 *TikTok Ads Manager Bot*\n\n"
         "📢 Команды:\n"
-        "/newcampaign — создать рекламную кампанию\n",
+        "/newcampaign — создать рекламную кампанию",
         parse_mode="Markdown",
         reply_markup=ReplyKeyboardRemove()
     )
@@ -103,7 +146,7 @@ async def cmd_new_campaign(message: types.Message, state: FSMContext):
     await state.set_state(CampaignStates.campaign_name)
     await message.answer(
         "📢 *Создание рекламной кампании*\n\n"
-        "Шаг 1/10 — Введи название кампании:",
+        "Шаг 1/12 — Введи название кампании:",
         parse_mode="Markdown",
         reply_markup=ReplyKeyboardRemove()
     )
@@ -116,14 +159,33 @@ async def got_campaign_name(message: types.Message, state: FSMContext):
         keyboard=[[KeyboardButton(text=k)] for k in OBJECTIVES.keys()],
         resize_keyboard=True, one_time_keyboard=True
     )
-    await message.answer("Шаг 2/10 — Выбери цель рекламы:", reply_markup=keyboard)
+    await message.answer("Шаг 2/12 — Выбери цель рекламы:", reply_markup=keyboard)
 
 @dp.message(CampaignStates.campaign_objective)
 async def got_objective(message: types.Message, state: FSMContext):
     if message.text not in OBJECTIVES:
-        await message.answer("Выбери цель из списка ниже 👇")
+        await message.answer("Выбери цель из списка 👇")
         return
     await state.update_data(objective=OBJECTIVES[message.text], objective_name=message.text)
+    await state.set_state(CampaignStates.budget_level)
+    keyboard = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="📊 Бюджет на кампанию")],
+            [KeyboardButton(text="📁 Бюджет на группу объявлений")],
+        ],
+        resize_keyboard=True, one_time_keyboard=True
+    )
+    await message.answer("Шаг 3/12 — Где устанавливать бюджет?", reply_markup=keyboard)
+
+@dp.message(CampaignStates.budget_level)
+async def got_budget_level(message: types.Message, state: FSMContext):
+    if message.text == "📊 Бюджет на кампанию":
+        await state.update_data(budget_level="campaign")
+    elif message.text == "📁 Бюджет на группу объявлений":
+        await state.update_data(budget_level="adgroup")
+    else:
+        await message.answer("Выбери из списка 👇")
+        return
     await state.set_state(CampaignStates.budget_mode)
     keyboard = ReplyKeyboardMarkup(
         keyboard=[
@@ -132,7 +194,7 @@ async def got_objective(message: types.Message, state: FSMContext):
         ],
         resize_keyboard=True, one_time_keyboard=True
     )
-    await message.answer("Шаг 3/10 — Тип бюджета кампании:", reply_markup=keyboard)
+    await message.answer("Шаг 4/12 — Тип бюджета:", reply_markup=keyboard)
 
 @dp.message(CampaignStates.budget_mode)
 async def got_budget_mode(message: types.Message, state: FSMContext):
@@ -141,25 +203,25 @@ async def got_budget_mode(message: types.Message, state: FSMContext):
     elif message.text == "💰 Общий бюджет":
         mode = "BUDGET_MODE_TOTAL"
     else:
-        await message.answer("Выбери тип бюджета из списка 👇")
+        await message.answer("Выбери тип бюджета 👇")
         return
     await state.update_data(budget_mode=mode)
     await state.set_state(CampaignStates.budget_amount)
-    await message.answer("Шаг 4/10 — Введи сумму бюджета (в USD, минимум 50):", reply_markup=ReplyKeyboardRemove())
+    await message.answer("Шаг 5/12 — Введи сумму бюджета (USD, минимум 50):", reply_markup=ReplyKeyboardRemove())
 
 @dp.message(CampaignStates.budget_amount)
 async def got_budget_amount(message: types.Message, state: FSMContext):
     try:
         amount = float(message.text.replace(",", "."))
         if amount < 50:
-            await message.answer("❌ Минимальный бюджет 50 USD. Введи сумму ещё раз:")
+            await message.answer("❌ Минимум 50 USD. Введи ещё раз:")
             return
     except ValueError:
         await message.answer("❌ Введи число. Например: 100")
         return
     await state.update_data(budget=amount)
     await state.set_state(CampaignStates.adgroup_name)
-    await message.answer("Шаг 5/10 — Введи название группы объявлений:")
+    await message.answer("Шаг 6/12 — Введи название группы объявлений:")
 
 @dp.message(CampaignStates.adgroup_name)
 async def got_adgroup_name(message: types.Message, state: FSMContext):
@@ -172,7 +234,7 @@ async def got_adgroup_name(message: types.Message, state: FSMContext):
         ],
         resize_keyboard=True, one_time_keyboard=True
     )
-    await message.answer("Шаг 6/10 — Плейсменты:", reply_markup=keyboard)
+    await message.answer("Шаг 7/12 — Плейсменты:", reply_markup=keyboard)
 
 @dp.message(CampaignStates.placement)
 async def got_placement(message: types.Message, state: FSMContext):
@@ -183,7 +245,7 @@ async def got_placement(message: types.Message, state: FSMContext):
         placement_type = "PLACEMENT_TYPE_AUTOMATIC"
         placements = []
     else:
-        await message.answer("Выбери плейсмент из списка 👇")
+        await message.answer("Выбери плейсмент 👇")
         return
     await state.update_data(placement_type=placement_type, placements=placements)
     await state.set_state(CampaignStates.geo)
@@ -191,7 +253,7 @@ async def got_placement(message: types.Message, state: FSMContext):
         keyboard=[[KeyboardButton(text=k)] for k in COUNTRIES.keys()],
         resize_keyboard=True, one_time_keyboard=True
     )
-    await message.answer("Шаг 7/10 — Выбери страну таргетинга:", reply_markup=keyboard)
+    await message.answer("Шаг 8/12 — Выбери страну таргетинга:", reply_markup=keyboard)
 
 @dp.message(CampaignStates.geo)
 async def got_geo(message: types.Message, state: FSMContext):
@@ -201,7 +263,7 @@ async def got_geo(message: types.Message, state: FSMContext):
     await state.update_data(geo=COUNTRIES[message.text], geo_name=message.text)
     await state.set_state(CampaignStates.schedule_start)
     await message.answer(
-        "Шаг 8/10 — Введи дату и время начала кампании\n"
+        "Шаг 9/12 — Дата и время начала кампании\n"
         "Формат: `YYYY-MM-DD HH:MM:SS`\n"
         "Например: `2026-06-20 10:00:00`",
         reply_markup=ReplyKeyboardRemove(),
@@ -217,9 +279,9 @@ async def got_schedule_start(message: types.Message, state: FSMContext):
         resize_keyboard=True, one_time_keyboard=True
     )
     await message.answer(
-        "Дата и время окончания кампании\n"
+        "Дата и время окончания\n"
         "Формат: `YYYY-MM-DD HH:MM:SS`\n"
-        "Или нажми кнопку чтобы не устанавливать:",
+        "Или нажми кнопку:",
         reply_markup=keyboard,
         parse_mode="Markdown"
     )
@@ -228,8 +290,39 @@ async def got_schedule_start(message: types.Message, state: FSMContext):
 async def got_schedule_end(message: types.Message, state: FSMContext):
     end = None if message.text == "♾ Без даты окончания" else message.text
     await state.update_data(schedule_end=end)
+    await state.set_state(CampaignStates.bid_type)
+    keyboard = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="🤖 Автоставка (без bid)")],
+            [KeyboardButton(text="✏️ Ручная ставка (указать bid)")],
+        ],
+        resize_keyboard=True, one_time_keyboard=True
+    )
+    await message.answer("Шаг 10/12 — Тип ставки (bid):", reply_markup=keyboard)
+
+@dp.message(CampaignStates.bid_type)
+async def got_bid_type(message: types.Message, state: FSMContext):
+    if message.text == "🤖 Автоставка (без bid)":
+        await state.update_data(bid_type="auto", bid_amount=None)
+        await state.set_state(CampaignStates.video_upload)
+        await message.answer("Шаг 11/12 — Отправь видео для рекламного объявления:", reply_markup=ReplyKeyboardRemove())
+    elif message.text == "✏️ Ручная ставка (указать bid)":
+        await state.update_data(bid_type="manual")
+        await state.set_state(CampaignStates.bid_amount)
+        await message.answer("Введи сумму ставки (USD):", reply_markup=ReplyKeyboardRemove())
+    else:
+        await message.answer("Выбери тип ставки 👇")
+
+@dp.message(CampaignStates.bid_amount)
+async def got_bid_amount(message: types.Message, state: FSMContext):
+    try:
+        bid = float(message.text.replace(",", "."))
+    except ValueError:
+        await message.answer("❌ Введи число. Например: 0.5")
+        return
+    await state.update_data(bid_amount=bid)
     await state.set_state(CampaignStates.video_upload)
-    await message.answer("Шаг 9/10 — Отправь видео для рекламного объявления:", reply_markup=ReplyKeyboardRemove())
+    await message.answer("Шаг 11/12 — Отправь видео для рекламного объявления:")
 
 @dp.message(CampaignStates.video_upload, F.video | F.document)
 async def got_campaign_video(message: types.Message, state: FSMContext):
@@ -248,17 +341,13 @@ async def got_ad_text(message: types.Message, state: FSMContext):
 async def got_ad_url(message: types.Message, state: FSMContext):
     await state.update_data(ad_url=message.text)
     await state.set_state(CampaignStates.select_advertisers)
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"☐ {adv_id[-6:]}", callback_data=f"adv_{adv_id}")]
-        for adv_id in ADVERTISER_IDS
-    ] + [
-        [InlineKeyboardButton(text="✅ Выбрать все", callback_data="adv_all")],
-        [InlineKeyboardButton(text="🚀 Создать кампанию", callback_data="create_campaign")]
-    ])
+    await message.answer(
+        "Шаг 12/12 — Выбери рекламные кабинеты:",
+        reply_markup=build_advertisers_keyboard([])
+    )
     await state.update_data(selected_advertisers=[])
-    await message.answer("Шаг 10/10 — Выбери рекламные аккаунты:", reply_markup=keyboard)
 
-@dp.callback_query(F.data.startswith("adv_") & ~F.data.endswith("all"))
+@dp.callback_query(F.data.startswith("adv_") & ~F.data.endswith("all") & ~F.data.endswith("none"))
 async def toggle_advertiser(callback: types.CallbackQuery, state: FSMContext):
     adv_id = callback.data.replace("adv_", "")
     data = await state.get_data()
@@ -268,58 +357,55 @@ async def toggle_advertiser(callback: types.CallbackQuery, state: FSMContext):
     else:
         selected.append(adv_id)
     await state.update_data(selected_advertisers=selected)
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"{'✅' if aid in selected else '☐'} {aid[-6:]}", callback_data=f"adv_{aid}")]
-        for aid in ADVERTISER_IDS
-    ] + [
-        [InlineKeyboardButton(text="✅ Выбрать все", callback_data="adv_all")],
-        [InlineKeyboardButton(text="🚀 Создать кампанию", callback_data="create_campaign")]
-    ])
     try:
-        await callback.message.edit_reply_markup(reply_markup=keyboard)
+        await callback.message.edit_reply_markup(reply_markup=build_advertisers_keyboard(selected))
     except Exception:
         pass
     await callback.answer()
 
 @dp.callback_query(F.data == "adv_all")
 async def select_all_advertisers(callback: types.CallbackQuery, state: FSMContext):
-    await state.update_data(selected_advertisers=ADVERTISER_IDS.copy())
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"✅ {aid[-6:]}", callback_data=f"adv_{aid}")]
-        for aid in ADVERTISER_IDS
-    ] + [
-        [InlineKeyboardButton(text="✅ Выбрать все", callback_data="adv_all")],
-        [InlineKeyboardButton(text="🚀 Создать кампанию", callback_data="create_campaign")]
-    ])
+    selected = list(ADVERTISERS.keys())
+    await state.update_data(selected_advertisers=selected)
     try:
-        await callback.message.edit_reply_markup(reply_markup=keyboard)
+        await callback.message.edit_reply_markup(reply_markup=build_advertisers_keyboard(selected))
     except Exception:
         pass
-    await callback.answer(f"Выбрано {len(ADVERTISER_IDS)} аккаунтов")
+    await callback.answer(f"Выбрано {len(selected)} кабинетов")
+
+@dp.callback_query(F.data == "adv_none")
+async def deselect_all_advertisers(callback: types.CallbackQuery, state: FSMContext):
+    await state.update_data(selected_advertisers=[])
+    try:
+        await callback.message.edit_reply_markup(reply_markup=build_advertisers_keyboard([]))
+    except Exception:
+        pass
+    await callback.answer("Все кабинеты сняты")
 
 @dp.callback_query(F.data == "create_campaign")
 async def create_campaign(callback: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
     selected = data.get("selected_advertisers", [])
     if not selected:
-        await callback.answer("Выбери хотя бы один рекламный аккаунт!", show_alert=True)
+        await callback.answer("Выбери хотя бы один кабинет!", show_alert=True)
         return
 
     await callback.message.answer(
         f"⏳ Создаю кампанию *{data['campaign_name']}*\n"
-        f"На {len(selected)} аккаунтах...",
+        f"На {len(selected)} кабинетах...",
         parse_mode="Markdown"
     )
     await state.clear()
 
     results = []
     for adv_id in selected:
+        name = ADVERTISERS.get(adv_id, adv_id)
         success, msg = await create_tiktok_campaign(adv_id, data)
         status = "✅" if success else "❌"
-        results.append(f"{status} `{adv_id[-6:]}`: {msg}")
+        results.append(f"{status} {name}: {msg}")
 
     text = f"📊 *Результат:*\n\n" + "\n".join(results)
-    for i in range(3):
+    for _ in range(3):
         try:
             await callback.message.answer(text, parse_mode="Markdown")
             break
@@ -333,20 +419,22 @@ async def create_tiktok_campaign(advertiser_id, data):
             "Content-Type": "application/json"
         }
         base_url = "https://business-api.tiktok.com/open_api/v1.3"
+        budget_level = data.get("budget_level", "campaign")
 
         async with aiohttp.ClientSession() as session:
             # 1. Создаём кампанию
-            camp_resp = await session.post(
-                f"{base_url}/campaign/create/",
-                json={
-                    "advertiser_id": advertiser_id,
-                    "campaign_name": data["campaign_name"],
-                    "objective_type": data["objective"],
-                    "budget_mode": data["budget_mode"],
-                    "budget": data["budget"],
-                },
-                headers=headers
-            )
+            camp_payload = {
+                "advertiser_id": advertiser_id,
+                "campaign_name": data["campaign_name"],
+                "objective_type": data["objective"],
+            }
+            if budget_level == "campaign":
+                camp_payload["budget_mode"] = data["budget_mode"]
+                camp_payload["budget"] = data["budget"]
+            else:
+                camp_payload["budget_mode"] = "BUDGET_MODE_INFINITE"
+
+            camp_resp = await session.post(f"{base_url}/campaign/create/", json=camp_payload, headers=headers)
             camp_data = await camp_resp.json()
             if camp_data.get("code") != 0:
                 return False, f"Ошибка кампании: {camp_data.get('message')}"
@@ -361,42 +449,47 @@ async def create_tiktok_campaign(advertiser_id, data):
             form = aiohttp.FormData()
             form.add_field("advertiser_id", advertiser_id)
             form.add_field("video_file", video_bytes, filename="video.mp4", content_type="video/mp4")
-
-            upload_resp = await session.post(
-                f"{base_url}/file/video/ad/upload/",
-                data=form,
-                headers={"Access-Token": MARKETING_TOKEN}
-            )
+            upload_resp = await session.post(f"{base_url}/file/video/ad/upload/", data=form, headers={"Access-Token": MARKETING_TOKEN})
             upload_data = await upload_resp.json()
             if upload_data.get("code") != 0:
-                return False, f"Ошибка загрузки видео: {upload_data.get('message')}"
+                return False, f"Ошибка видео: {upload_data.get('message')}"
             video_id = upload_data["data"]["video_id"]
 
             # 3. Создаём группу объявлений
+            optimize_goal = "CLICK" if data["objective"] == "TRAFFIC" else "REACH"
+            billing_event = "CPC" if data["objective"] == "TRAFFIC" else "CPM"
+
             adgroup_payload = {
                 "advertiser_id": advertiser_id,
                 "campaign_id": campaign_id,
                 "adgroup_name": data["adgroup_name"],
                 "placement_type": data["placement_type"],
                 "location_ids": [data["geo"]],
-                "budget_mode": data["budget_mode"],
-                "budget": data["budget"],
                 "schedule_type": "SCHEDULE_START_END" if data.get("schedule_end") else "SCHEDULE_FROM_NOW",
                 "schedule_start_time": data["schedule_start"],
-                "optimize_goal": "CLICK" if data["objective"] == "TRAFFIC" else "REACH",
-                "billing_event": "CPC" if data["objective"] == "TRAFFIC" else "CPM",
+                "optimize_goal": optimize_goal,
+                "billing_event": billing_event,
                 "pacing": "PACING_MODE_SMOOTH",
             }
+
+            if budget_level == "adgroup":
+                adgroup_payload["budget_mode"] = data["budget_mode"]
+                adgroup_payload["budget"] = data["budget"]
+
             if data.get("schedule_end"):
                 adgroup_payload["schedule_end_time"] = data["schedule_end"]
+
             if data["placement_type"] == "PLACEMENT_TYPE_NORMAL":
                 adgroup_payload["placements"] = data["placements"]
 
-            adgroup_resp = await session.post(
-                f"{base_url}/adgroup/create/",
-                json=adgroup_payload,
-                headers=headers
-            )
+            # Ставка
+            if data.get("bid_type") == "manual" and data.get("bid_amount"):
+                adgroup_payload["bid_type"] = "BID_TYPE_CUSTOM"
+                adgroup_payload["bid_price"] = data["bid_amount"]
+            else:
+                adgroup_payload["bid_type"] = "BID_TYPE_NO_BID"
+
+            adgroup_resp = await session.post(f"{base_url}/adgroup/create/", json=adgroup_payload, headers=headers)
             adgroup_data = await adgroup_resp.json()
             if adgroup_data.get("code") != 0:
                 return False, f"Ошибка группы: {adgroup_data.get('message')}"
