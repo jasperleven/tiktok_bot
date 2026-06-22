@@ -194,7 +194,9 @@ async def upload_video_to_tiktok(advertiser_id, video_path):
         form.add_field("advertiser_id", advertiser_id)
         form.add_field("upload_type", "UPLOAD_BY_FILE")
         form.add_field("video_signature", md5_hash)
-        form.add_field("video_file", video_bytes, filename="video.mp4", content_type="video/mp4")
+        import time
+        unique_name = f"video_{advertiser_id}_{int(time.time())}.mp4"
+        form.add_field("video_file", video_bytes, filename=unique_name, content_type="video/mp4")
         
         resp = await session.post(
             "https://business-api.tiktok.com/open_api/v1.3/file/video/ad/upload/",
