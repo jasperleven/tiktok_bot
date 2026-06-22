@@ -3,6 +3,7 @@ import os
 import json
 import threading
 import aiohttp
+import tempfile
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
@@ -101,6 +102,8 @@ class CampaignStates(StatesGroup):
     schedule_end       = State()
     bid_type           = State()
     bid_amount         = State()
+    pixel_search       = State()
+    pixel_select       = State()
     video_upload       = State()
     ad_text            = State()
     ad_url             = State()
@@ -131,6 +134,63 @@ def build_advertisers_keyboard(selected):
     rows.append([InlineKeyboardButton(text="🚀 Создать кампанию", callback_data="create_campaign")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
+async def search_pixels(advertiser_id, query):
+    """Поиск пикселей в рекламном кабинете по части названия"""
+    try:
+        async with aiohttp.ClientSession() as session:
+            resp = await session.get(
+                f"https://business-api.tiktok.com/open_api/v1.3/pixel/list/",
+                params={"advertiser_id": advertiser_id},
+                headers={"Access-Token": MARKETING_TOKEN}
+            )
+            data = await resp.json()
+            if data.get("code") != 0:
+                return []
+            pixels = data.get("data", {}).get("pixels", [])
+            query_lower = query.lower()
+            return [p for p in pixels if query_lower in p.get("name", "").lower()]
+    except Exception:
+        return []
+
+async def download_video_to_hetzner(file_id):
+    """Скачивает видео из Telegram на сервер и возвращает путь к файлу"""
+    file = await bot.get_file(file_id)
+    file_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file.file_path}"
+    
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4", dir="/tmp")
+    tmp_path = tmp.name
+    tmp.close()
+    
+    async with aiohttp.ClientSession() as session:
+        async with session.get(file_url) as resp:
+            with open(tmp_path, "wb") as f:
+                async for chunk in resp.content.iter_chunked(1024 * 1024):
+                    f.write(chunk)
+    
+    return tmp_path
+
+async def upload_video_to_tiktok(advertiser_id, video_path):
+    """Загружает видео с сервера в TikTok и возвращает video_id"""
+    async with aiohttp.ClientSession() as session:
+        with open(video_path, "rb") as f:
+            video_bytes = f.read()
+        
+        form = aiohttp.FormData()
+        form.add_field("advertiser_id", advertiser_id)
+        form.add_field("video_file", video_bytes, filename="video.mp4", content_type="video/mp4")
+        
+        resp = await session.post(
+            "https://business-api.tiktok.com/open_api/v1.3/file/video/ad/upload/",
+            data=form,
+            headers={"Access-Token": MARKETING_TOKEN}
+        )
+        data = await resp.json()
+        
+        if data.get("code") != 0:
+            raise Exception(f"Ошибка загрузки видео: {data.get('message')}")
+        
+        return data["data"]["video_id"]
+
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     await message.answer(
@@ -146,7 +206,7 @@ async def cmd_new_campaign(message: types.Message, state: FSMContext):
     await state.set_state(CampaignStates.campaign_name)
     await message.answer(
         "📢 *Создание рекламной кампании*\n\n"
-        "Шаг 1/12 — Введи название кампании:",
+        "Шаг 1/13 — Введи название кампании:",
         parse_mode="Markdown",
         reply_markup=ReplyKeyboardRemove()
     )
@@ -159,7 +219,7 @@ async def got_campaign_name(message: types.Message, state: FSMContext):
         keyboard=[[KeyboardButton(text=k)] for k in OBJECTIVES.keys()],
         resize_keyboard=True, one_time_keyboard=True
     )
-    await message.answer("Шаг 2/12 — Выбери цель рекламы:", reply_markup=keyboard)
+    await message.answer("Шаг 2/13 — Выбери цель рекламы:", reply_markup=keyboard)
 
 @dp.message(CampaignStates.campaign_objective)
 async def got_objective(message: types.Message, state: FSMContext):
@@ -175,7 +235,7 @@ async def got_objective(message: types.Message, state: FSMContext):
         ],
         resize_keyboard=True, one_time_keyboard=True
     )
-    await message.answer("Шаг 3/12 — Где устанавливать бюджет?", reply_markup=keyboard)
+    await message.answer("Шаг 3/13 — Где устанавливать бюджет?", reply_markup=keyboard)
 
 @dp.message(CampaignStates.budget_level)
 async def got_budget_level(message: types.Message, state: FSMContext):
@@ -194,7 +254,7 @@ async def got_budget_level(message: types.Message, state: FSMContext):
         ],
         resize_keyboard=True, one_time_keyboard=True
     )
-    await message.answer("Шаг 4/12 — Тип бюджета:", reply_markup=keyboard)
+    await message.answer("Шаг 4/13 — Тип бюджета:", reply_markup=keyboard)
 
 @dp.message(CampaignStates.budget_mode)
 async def got_budget_mode(message: types.Message, state: FSMContext):
@@ -207,7 +267,7 @@ async def got_budget_mode(message: types.Message, state: FSMContext):
         return
     await state.update_data(budget_mode=mode)
     await state.set_state(CampaignStates.budget_amount)
-    await message.answer("Шаг 5/12 — Введи сумму бюджета (USD, минимум 50):", reply_markup=ReplyKeyboardRemove())
+    await message.answer("Шаг 5/13 — Введи сумму бюджета (USD, минимум 50):", reply_markup=ReplyKeyboardRemove())
 
 @dp.message(CampaignStates.budget_amount)
 async def got_budget_amount(message: types.Message, state: FSMContext):
@@ -221,7 +281,7 @@ async def got_budget_amount(message: types.Message, state: FSMContext):
         return
     await state.update_data(budget=amount)
     await state.set_state(CampaignStates.adgroup_name)
-    await message.answer("Шаг 6/12 — Введи название группы объявлений:")
+    await message.answer("Шаг 6/13 — Введи название группы объявлений:")
 
 @dp.message(CampaignStates.adgroup_name)
 async def got_adgroup_name(message: types.Message, state: FSMContext):
@@ -234,7 +294,7 @@ async def got_adgroup_name(message: types.Message, state: FSMContext):
         ],
         resize_keyboard=True, one_time_keyboard=True
     )
-    await message.answer("Шаг 7/12 — Плейсменты:", reply_markup=keyboard)
+    await message.answer("Шаг 7/13 — Плейсменты:", reply_markup=keyboard)
 
 @dp.message(CampaignStates.placement)
 async def got_placement(message: types.Message, state: FSMContext):
@@ -253,7 +313,7 @@ async def got_placement(message: types.Message, state: FSMContext):
         keyboard=[[KeyboardButton(text=k)] for k in COUNTRIES.keys()],
         resize_keyboard=True, one_time_keyboard=True
     )
-    await message.answer("Шаг 8/12 — Выбери страну таргетинга:", reply_markup=keyboard)
+    await message.answer("Шаг 8/13 — Выбери страну таргетинга:", reply_markup=keyboard)
 
 @dp.message(CampaignStates.geo)
 async def got_geo(message: types.Message, state: FSMContext):
@@ -263,7 +323,7 @@ async def got_geo(message: types.Message, state: FSMContext):
     await state.update_data(geo=COUNTRIES[message.text], geo_name=message.text)
     await state.set_state(CampaignStates.schedule_start)
     await message.answer(
-        "Шаг 9/12 — Дата и время начала кампании\n"
+        "Шаг 9/13 — Дата и время начала кампании\n"
         "Формат: `YYYY-MM-DD HH:MM:SS`\n"
         "Например: `2026-06-20 10:00:00`",
         reply_markup=ReplyKeyboardRemove(),
@@ -298,14 +358,20 @@ async def got_schedule_end(message: types.Message, state: FSMContext):
         ],
         resize_keyboard=True, one_time_keyboard=True
     )
-    await message.answer("Шаг 10/12 — Тип ставки (bid):", reply_markup=keyboard)
+    await message.answer("Шаг 10/13 — Тип ставки (bid):", reply_markup=keyboard)
 
 @dp.message(CampaignStates.bid_type)
 async def got_bid_type(message: types.Message, state: FSMContext):
     if message.text == "🤖 Автоставка (без bid)":
         await state.update_data(bid_type="auto", bid_amount=None)
-        await state.set_state(CampaignStates.video_upload)
-        await message.answer("Шаг 11/12 — Отправь видео для рекламного объявления:", reply_markup=ReplyKeyboardRemove())
+        await state.set_state(CampaignStates.pixel_search)
+        await message.answer(
+            "Шаг 11/13 — Введи часть названия пикселя для поиска\n"
+            "Например: `ART` или `ERC`\n\n"
+            "Или нажми /skippixel чтобы пропустить",
+            reply_markup=ReplyKeyboardRemove(),
+            parse_mode="Markdown"
+        )
     elif message.text == "✏️ Ручная ставка (указать bid)":
         await state.update_data(bid_type="manual")
         await state.set_state(CampaignStates.bid_amount)
@@ -321,15 +387,75 @@ async def got_bid_amount(message: types.Message, state: FSMContext):
         await message.answer("❌ Введи число. Например: 0.5")
         return
     await state.update_data(bid_amount=bid)
+    await state.set_state(CampaignStates.pixel_search)
+    await message.answer(
+        "Шаг 11/13 — Введи часть названия пикселя для поиска\n"
+        "Например: `ART` или `ERC`\n\n"
+        "Или отправь /skippixel чтобы пропустить",
+        parse_mode="Markdown"
+    )
+
+@dp.message(Command("skippixel"))
+async def skip_pixel(message: types.Message, state: FSMContext):
+    await state.update_data(pixel_id=None)
     await state.set_state(CampaignStates.video_upload)
-    await message.answer("Шаг 11/12 — Отправь видео для рекламного объявления:")
+    await message.answer("Шаг 12/13 — Отправь видео для рекламного объявления:")
+
+@dp.message(CampaignStates.pixel_search)
+async def got_pixel_search(message: types.Message, state: FSMContext):
+    query = message.text.strip()
+    await message.answer(f"🔍 Ищу пиксели с '{query}'...")
+
+    data = await state.get_data()
+    selected_advertisers = data.get("selected_advertisers", [])
+    
+    # Ищем в первом выбранном кабинете или в первом из списка
+    search_adv_id = list(ADVERTISERS.keys())[0]
+    
+    pixels = await search_pixels(search_adv_id, query)
+    
+    if not pixels:
+        await message.answer(
+            f"❌ Пиксели с '{query}' не найдены.\n"
+            "Попробуй другой запрос или отправь /skippixel чтобы пропустить."
+        )
+        return
+
+    await state.update_data(found_pixels=pixels)
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=f"{p['name']} ({p['pixel_id']})",
+            callback_data=f"pixel_{p['pixel_id']}"
+        )]
+        for p in pixels[:10]
+    ] + [[InlineKeyboardButton(text="⏭ Пропустить пиксель", callback_data="pixel_skip")]])
+    
+    await message.answer("Выбери пиксель:", reply_markup=keyboard)
+    await state.set_state(CampaignStates.pixel_select)
+
+@dp.callback_query(F.data.startswith("pixel_") & ~F.data.endswith("skip"))
+async def got_pixel_select(callback: types.CallbackQuery, state: FSMContext):
+    pixel_id = callback.data.replace("pixel_", "")
+    await state.update_data(pixel_id=pixel_id)
+    await callback.message.answer(f"✅ Пиксель выбран: `{pixel_id}`", parse_mode="Markdown")
+    await state.set_state(CampaignStates.video_upload)
+    await callback.message.answer("Шаг 12/13 — Отправь видео для рекламного объявления:")
+    await callback.answer()
+
+@dp.callback_query(F.data == "pixel_skip")
+async def skip_pixel_callback(callback: types.CallbackQuery, state: FSMContext):
+    await state.update_data(pixel_id=None)
+    await state.set_state(CampaignStates.video_upload)
+    await callback.message.answer("Шаг 12/13 — Отправь видео для рекламного объявления:")
+    await callback.answer()
 
 @dp.message(CampaignStates.video_upload, F.video | F.document)
 async def got_campaign_video(message: types.Message, state: FSMContext):
     file_id = message.document.file_id if message.document else message.video.file_id
     await state.update_data(video_file_id=file_id)
     await state.set_state(CampaignStates.ad_text)
-    await message.answer("Текст объявления (до 100 символов):")
+    await message.answer("✅ Видео получено!\n\nТекст объявления (до 100 символов):")
 
 @dp.message(CampaignStates.ad_text)
 async def got_ad_text(message: types.Message, state: FSMContext):
@@ -342,7 +468,7 @@ async def got_ad_url(message: types.Message, state: FSMContext):
     await state.update_data(ad_url=message.text)
     await state.set_state(CampaignStates.select_advertisers)
     await message.answer(
-        "Шаг 12/12 — Выбери рекламные кабинеты:",
+        "Шаг 13/13 — Выбери рекламные кабинеты:",
         reply_markup=build_advertisers_keyboard([])
     )
     await state.update_data(selected_advertisers=[])
@@ -392,27 +518,46 @@ async def create_campaign(callback: types.CallbackQuery, state: FSMContext):
 
     await callback.message.answer(
         f"⏳ Создаю кампанию *{data['campaign_name']}*\n"
-        f"На {len(selected)} кабинетах...",
+        f"На {len(selected)} кабинетах...\n\n"
+        f"Скачиваю видео на сервер...",
         parse_mode="Markdown"
     )
     await state.clear()
 
-    results = []
+    # Скачиваем видео на Hetzner один раз
+    video_path = None
+    try:
+        video_path = await download_video_to_hetzner(data["video_file_id"])
+        await callback.message.answer("✅ Видео загружено на сервер. Создаю кампании...")
+    except Exception as e:
+        await callback.message.answer(f"❌ Ошибка скачивания видео: {e}")
+        return
+
+    # Создаём кампанию в каждом кабинете
     for adv_id in selected:
         name = ADVERTISERS.get(adv_id, adv_id)
-        success, msg = await create_tiktok_campaign(adv_id, data)
+        success, msg = await create_tiktok_campaign(adv_id, data, video_path)
         status = "✅" if success else "❌"
-        results.append(f"{status} {name}: {msg}")
+        result_text = f"{status} *{name}*\n`{msg}`"
+        for _ in range(5):
+            try:
+                await callback.message.answer(result_text, parse_mode="Markdown")
+                break
+            except Exception:
+                await asyncio.sleep(3)
 
-    text = f"📊 *Результат:*\n\n" + "\n".join(results)
-    for _ in range(3):
+    # Удаляем видео с сервера
+    if video_path and os.path.exists(video_path):
+        os.remove(video_path)
+
+    for _ in range(5):
         try:
-            await callback.message.answer(text, parse_mode="Markdown")
+            await callback.message.answer("✅ Готово! Все кабинеты обработаны.")
             break
         except Exception:
-            await asyncio.sleep(2)
+            await asyncio.sleep(3)
 
-async def create_tiktok_campaign(advertiser_id, data):
+async def create_tiktok_campaign(advertiser_id, data, video_path):
     try:
         headers = {
             "Access-Token": MARKETING_TOKEN,
@@ -440,20 +585,8 @@ async def create_tiktok_campaign(advertiser_id, data):
                 return False, f"Ошибка кампании: {camp_data.get('message')}"
             campaign_id = camp_data["data"]["campaign_id"]
 
-            # 2. Загружаем видео
-            file = await bot.get_file(data["video_file_id"])
-            file_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file.file_path}"
-            async with session.get(file_url) as resp:
-                video_bytes = await resp.read()
-
-            form = aiohttp.FormData()
-            form.add_field("advertiser_id", advertiser_id)
-            form.add_field("video_file", video_bytes, filename="video.mp4", content_type="video/mp4")
-            upload_resp = await session.post(f"{base_url}/file/video/ad/upload/", data=form, headers={"Access-Token": MARKETING_TOKEN})
-            upload_data = await upload_resp.json()
-            if upload_data.get("code") != 0:
-                return False, f"Ошибка видео: {upload_data.get('message')}"
-            video_id = upload_data["data"]["video_id"]
+            # 2. Загружаем видео в TikTok
+            video_id = await upload_video_to_tiktok(advertiser_id, video_path)
 
             # 3. Создаём группу объявлений
             optimize_goal = "CLICK" if data["objective"] == "TRAFFIC" else "REACH"
@@ -482,12 +615,14 @@ async def create_tiktok_campaign(advertiser_id, data):
             if data["placement_type"] == "PLACEMENT_TYPE_NORMAL":
                 adgroup_payload["placements"] = data["placements"]
 
-            # Ставка
             if data.get("bid_type") == "manual" and data.get("bid_amount"):
                 adgroup_payload["bid_type"] = "BID_TYPE_CUSTOM"
                 adgroup_payload["bid_price"] = data["bid_amount"]
             else:
                 adgroup_payload["bid_type"] = "BID_TYPE_NO_BID"
+
+            if data.get("pixel_id"):
+                adgroup_payload["pixel_id"] = data["pixel_id"]
 
             adgroup_resp = await session.post(f"{base_url}/adgroup/create/", json=adgroup_payload, headers=headers)
             adgroup_data = await adgroup_resp.json()
