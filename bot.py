@@ -90,6 +90,7 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
 class CampaignStates(StatesGroup):
+    select_advertisers = State()
     campaign_name      = State()
     campaign_objective = State()
     budget_level       = State()
@@ -107,7 +108,6 @@ class CampaignStates(StatesGroup):
     video_upload       = State()
     ad_text            = State()
     ad_url             = State()
-    select_advertisers = State()
 
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -123,6 +123,18 @@ def run_web():
     server.serve_forever()
 
 def build_advertisers_keyboard(selected):
+    rows = []
+    for adv_id, name in ADVERTISERS.items():
+        mark = "✅" if adv_id in selected else "☐"
+        rows.append([InlineKeyboardButton(text=f"{mark} {name}", callback_data=f"adv_{adv_id}")])
+    rows.append([
+        InlineKeyboardButton(text="✅ Выбрать все", callback_data="adv_all"),
+        InlineKeyboardButton(text="❌ Снять все", callback_data="adv_none"),
+    ])
+    rows.append([InlineKeyboardButton(text="➡️ Далее", callback_data="advertisers_done")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+def build_advertisers_keyboard_final(selected):
     rows = []
     for adv_id, name in ADVERTISERS.items():
         mark = "✅" if adv_id in selected else "☐"
@@ -171,12 +183,17 @@ async def download_video_to_hetzner(file_id):
 
 async def upload_video_to_tiktok(advertiser_id, video_path):
     """Загружает видео с сервера в TikTok и возвращает video_id"""
+    import hashlib
     async with aiohttp.ClientSession() as session:
         with open(video_path, "rb") as f:
             video_bytes = f.read()
         
+        md5_hash = hashlib.md5(video_bytes).hexdigest()
+        
         form = aiohttp.FormData()
         form.add_field("advertiser_id", advertiser_id)
+        form.add_field("upload_type", "UPLOAD_BY_FILE")
+        form.add_field("video_signature", md5_hash)
         form.add_field("video_file", video_bytes, filename="video.mp4", content_type="video/mp4")
         
         resp = await session.post(
@@ -203,12 +220,13 @@ async def cmd_start(message: types.Message):
 
 @dp.message(Command("newcampaign"))
 async def cmd_new_campaign(message: types.Message, state: FSMContext):
-    await state.set_state(CampaignStates.campaign_name)
+    await state.set_state(CampaignStates.select_advertisers)
+    await state.update_data(selected_advertisers=[])
     await message.answer(
         "📢 *Создание рекламной кампании*\n\n"
-        "Шаг 1/13 — Введи название кампании:",
+        "Шаг 1/13 — Выбери рекламные кабинеты:",
         parse_mode="Markdown",
-        reply_markup=ReplyKeyboardRemove()
+        reply_markup=build_advertisers_keyboard([])
     )
 
 @dp.message(CampaignStates.campaign_name)
@@ -395,6 +413,21 @@ async def got_bid_amount(message: types.Message, state: FSMContext):
         parse_mode="Markdown"
     )
 
+@dp.callback_query(F.data == "advertisers_done")
+async def advertisers_done(callback: types.CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    selected = data.get("selected_advertisers", [])
+    if not selected:
+        await callback.answer("Выбери хотя бы один кабинет!", show_alert=True)
+        return
+    await state.set_state(CampaignStates.campaign_name)
+    await callback.message.answer(
+        f"✅ Выбрано {len(selected)} кабинетов\n\n"
+        "Шаг 2/13 — Введи название кампании:",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    await callback.answer()
+
 @dp.message(Command("skippixel"))
 async def skip_pixel(message: types.Message, state: FSMContext):
     await state.update_data(pixel_id=None)
@@ -409,8 +442,8 @@ async def got_pixel_search(message: types.Message, state: FSMContext):
     data = await state.get_data()
     selected_advertisers = data.get("selected_advertisers", [])
     
-    # Ищем в первом выбранном кабинете или в первом из списка
-    search_adv_id = list(ADVERTISERS.keys())[0]
+    # Ищем в первом выбранном кабинете
+    search_adv_id = selected_advertisers[0] if selected_advertisers else list(ADVERTISERS.keys())[0]
     
     pixels = await search_pixels(search_adv_id, query)
     
@@ -466,12 +499,15 @@ async def got_ad_text(message: types.Message, state: FSMContext):
 @dp.message(CampaignStates.ad_url)
 async def got_ad_url(message: types.Message, state: FSMContext):
     await state.update_data(ad_url=message.text)
-    await state.set_state(CampaignStates.select_advertisers)
+    data = await state.get_data()
+    selected = data.get("selected_advertisers", [])
+    names = [ADVERTISERS.get(a, a) for a in selected]
     await message.answer(
-        "Шаг 13/13 — Выбери рекламные кабинеты:",
-        reply_markup=build_advertisers_keyboard([])
+        f"✅ Всё готово! Нажми *Создать кампанию* для запуска на {len(selected)} кабинетах:\n" +
+        "\n".join(f"• {n}" for n in names),
+        parse_mode="Markdown",
+        reply_markup=build_advertisers_keyboard_final(selected)
     )
-    await state.update_data(selected_advertisers=[])
 
 @dp.callback_query(F.data.startswith("adv_") & ~F.data.endswith("all") & ~F.data.endswith("none"))
 async def toggle_advertiser(callback: types.CallbackQuery, state: FSMContext):
