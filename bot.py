@@ -690,6 +690,10 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
 
             return True, f"campaign_id: {campaign_id}"
 
+    except TypeError as e:
+        import traceback
+        return False, f"TypeError: {str(e)} | {traceback.format_exc()[-200:]}"
+
     except Exception as e:
         return False, str(e)
 
