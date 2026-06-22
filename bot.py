@@ -206,9 +206,13 @@ async def upload_video_to_tiktok(advertiser_id, video_path):
         data = await resp.json()
         
         if data.get("code") != 0:
-            raise Exception(f"Ошибка загрузки видео: {data.get('message')}")
+            raise Exception(f"Ошибка загрузки видео: {data.get('message')} | raw: {data}")
         
-        return data["data"]["video_id"]
+        # data["data"] может быть списком или словарём
+        d = data["data"]
+        if isinstance(d, list):
+            return d[0]["video_id"]
+        return d["video_id"]
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
