@@ -599,6 +599,13 @@ async def create_campaign(callback: types.CallbackQuery, state: FSMContext):
         except Exception:
             await asyncio.sleep(3)
 
+async def log_api(step, payload, response):
+    import datetime
+    with open("/tmp/tiktok_api.log", "a") as f:
+        f.write(f"\n=== {datetime.datetime.now()} | {step} ===\n")
+        f.write(f"REQUEST: {json.dumps(payload, indent=2)}\n")
+        f.write(f"RESPONSE: {json.dumps(response, indent=2)}\n")
+
 async def create_tiktok_campaign(advertiser_id, data, video_path):
     try:
         headers = {
@@ -623,6 +630,7 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
 
             camp_resp = await session.post(f"{base_url}/campaign/create/", json=camp_payload, headers=headers)
             camp_data = await camp_resp.json()
+            await log_api("CAMPAIGN CREATE", camp_payload, camp_data)
             if camp_data.get("code") != 0:
                 return False, f"Ошибка кампании: {camp_data.get('message')}"
             campaign_id = camp_data["data"]["campaign_id"]
@@ -650,6 +658,8 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
             if budget_level == "adgroup":
                 adgroup_payload["budget_mode"] = data["budget_mode"]
                 adgroup_payload["budget"] = data["budget"]
+            else:
+                adgroup_payload["budget_mode"] = "BUDGET_MODE_INFINITE"
 
             if data.get("schedule_end"):
                 adgroup_payload["schedule_end_time"] = data["schedule_end"]
@@ -668,6 +678,7 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
 
             adgroup_resp = await session.post(f"{base_url}/adgroup/create/", json=adgroup_payload, headers=headers)
             adgroup_data = await adgroup_resp.json()
+            await log_api("ADGROUP CREATE", adgroup_payload, adgroup_data)
             if adgroup_data.get("code") != 0:
                 return False, f"Ошибка группы: {adgroup_data.get('message')}"
             adgroup_id = adgroup_data["data"]["adgroup_id"]
@@ -689,6 +700,7 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                 headers=headers
             )
             ad_data = await ad_resp.json()
+            await log_api("AD CREATE", {}, ad_data)
             if ad_data.get("code") != 0:
                 return False, f"Ошибка объявления: {ad_data.get('message')}"
 
