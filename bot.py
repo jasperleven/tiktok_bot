@@ -625,6 +625,7 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
             if budget_level == "campaign":
                 camp_payload["budget_mode"] = data["budget_mode"]
                 camp_payload["budget"] = data["budget"]
+                camp_payload["budget_optimize_on"] = True
             else:
                 camp_payload["budget_mode"] = "BUDGET_MODE_INFINITE"
 
@@ -658,8 +659,6 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
             if budget_level == "adgroup":
                 adgroup_payload["budget_mode"] = data["budget_mode"]
                 adgroup_payload["budget"] = data["budget"]
-            else:
-                adgroup_payload["budget_mode"] = "BUDGET_MODE_INFINITE"
 
             if data.get("schedule_end"):
                 adgroup_payload["schedule_end_time"] = data["schedule_end"]
