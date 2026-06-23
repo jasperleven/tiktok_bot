@@ -651,12 +651,11 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                 "pacing": "PACING_MODE_SMOOTH",
             }
 
-            # optimize_goal и billing_event только если бюджет на группу (не CBO)
-            if budget_level == "adgroup":
-                optimize_goal = "CLICK" if data["objective"] == "TRAFFIC" else "REACH"
-                billing_event = "CPC" if data["objective"] == "TRAFFIC" else "CPM"
-                adgroup_payload["optimize_goal"] = optimize_goal
-                adgroup_payload["billing_event"] = billing_event
+            # optimize_goal и billing_event всегда обязательны
+            optimize_goal = "CLICK" if data["objective"] == "TRAFFIC" else "REACH"
+            billing_event = "CPC" if data["objective"] == "TRAFFIC" else "CPM"
+            adgroup_payload["optimize_goal"] = optimize_goal
+            adgroup_payload["billing_event"] = billing_event
 
             if budget_level == "adgroup":
                 adgroup_payload["budget_mode"] = data["budget_mode"]
