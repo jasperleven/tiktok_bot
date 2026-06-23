@@ -639,7 +639,7 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                 "campaign_id": campaign_id,
                 "adgroup_name": data["adgroup_name"],
                 "placement_type": data["placement_type"],
-                "location_ids": [int(data["geo"])],
+                "location_ids": [str(data["geo"])],
                 "schedule_type": "SCHEDULE_START_END" if data.get("schedule_end") else "SCHEDULE_FROM_NOW",
                 "schedule_start_time": data["schedule_start"],
                 "optimize_goal": optimize_goal,
