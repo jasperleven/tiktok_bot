@@ -625,7 +625,8 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
             if budget_level == "campaign":
                 camp_payload["budget_mode"] = data["budget_mode"]
                 camp_payload["budget"] = data["budget"]
-                camp_payload["budget_optimize_on"] = True
+                # CBO отключаем - группа сама управляет бюджетом
+                # camp_payload["budget_optimize_on"] = True
             else:
                 camp_payload["budget_mode"] = "BUDGET_MODE_INFINITE"
 
@@ -657,9 +658,9 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
             adgroup_payload["optimize_goal"] = optimize_goal
             adgroup_payload["billing_event"] = billing_event
 
-            if budget_level == "adgroup":
-                adgroup_payload["budget_mode"] = data["budget_mode"]
-                adgroup_payload["budget"] = data["budget"]
+            # Бюджет всегда нужен на группе (CBO отключён)
+            adgroup_payload["budget_mode"] = data["budget_mode"]
+            adgroup_payload["budget"] = data["budget"]
 
             if data.get("schedule_end"):
                 adgroup_payload["schedule_end_time"] = data["schedule_end"]
