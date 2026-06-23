@@ -297,8 +297,8 @@ async def got_budget_mode(message: types.Message, state: FSMContext):
 async def got_budget_amount(message: types.Message, state: FSMContext):
     try:
         amount = float(message.text.replace(",", "."))
-        if amount < 50:
-            await message.answer("❌ Минимум 50 USD. Введи ещё раз:")
+        if amount < 20:
+            await message.answer("❌ Минимум 20 USD. Введи ещё раз:")
             return
     except ValueError:
         await message.answer("❌ Введи число. Например: 100")
@@ -652,11 +652,20 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                 "pacing": "PACING_MODE_SMOOTH",
             }
 
-            # optimize_goal и billing_event всегда обязательны
-            optimize_goal = "CLICK" if data["objective"] == "TRAFFIC" else "REACH"
-            billing_event = "CPC" if data["objective"] == "TRAFFIC" else "CPM"
+            # optimize_goal маппинг по objective
+            objective = data["objective"]
+            if objective in ["TRAFFIC", "REACH"]:
+                optimize_goal = "CLICK"
+                billing_event = "CPC"
+            elif objective == "VIDEO_VIEWS":
+                optimize_goal = "VIDEO_PLAY"
+                billing_event = "CPV"
+            else:
+                optimize_goal = "CLICK"
+                billing_event = "CPC"
             adgroup_payload["optimize_goal"] = optimize_goal
             adgroup_payload["billing_event"] = billing_event
+            adgroup_payload["external_type"] = "WEBSITE"
 
             # Бюджет всегда нужен на группе (CBO отключён)
             adgroup_payload["budget_mode"] = data["budget_mode"]
