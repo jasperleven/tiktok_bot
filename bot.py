@@ -640,9 +640,6 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
             video_id = await upload_video_to_tiktok(advertiser_id, video_path)
 
             # 3. Создаём группу объявлений
-            optimize_goal = "CLICK" if data["objective"] == "TRAFFIC" else "REACH"
-            billing_event = "CPC" if data["objective"] == "TRAFFIC" else "CPM"
-
             adgroup_payload = {
                 "advertiser_id": advertiser_id,
                 "campaign_id": campaign_id,
@@ -651,10 +648,15 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                 "location_ids": [str(data["geo"])],
                 "schedule_type": "SCHEDULE_START_END" if data.get("schedule_end") else "SCHEDULE_FROM_NOW",
                 "schedule_start_time": data["schedule_start"],
-                "optimize_goal": optimize_goal,
-                "billing_event": billing_event,
                 "pacing": "PACING_MODE_SMOOTH",
             }
+
+            # optimize_goal и billing_event только если бюджет на группу (не CBO)
+            if budget_level == "adgroup":
+                optimize_goal = "CLICK" if data["objective"] == "TRAFFIC" else "REACH"
+                billing_event = "CPC" if data["objective"] == "TRAFFIC" else "CPM"
+                adgroup_payload["optimize_goal"] = optimize_goal
+                adgroup_payload["billing_event"] = billing_event
 
             if budget_level == "adgroup":
                 adgroup_payload["budget_mode"] = data["budget_mode"]
