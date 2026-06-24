@@ -594,8 +594,23 @@ async def create_campaign(callback: types.CallbackQuery, state: FSMContext):
     text = f"📊 *Результат создания кампании:*\n\n" + "\n".join(results)
     await callback.message.answer(text, parse_mode="Markdown")
 
+def get_adgroup_optimization(objective):
+    """Возвращает правильные optimize_goal, billing_event, promotion_type для каждой цели."""
+    mapping = {
+        "REACH":           ("REACH",            "CPM",  "WEBSITE"),
+        "TRAFFIC":         ("CLICK",            "CPC",  "WEBSITE"),
+        "VIDEO_VIEWS":     ("VIDEO_PLAY",        "CPV",  "WEBSITE"),
+        "LEAD_GENERATION": ("LEAD_GENERATION",   "OCPM", "LEAD_GENERATION"),
+        "CONVERSIONS":     ("CONVERT",           "OCPM", "WEBSITE"),
+        "APP_PROMOTION":   ("INSTALL",           "OCPM", "APP"),
+        "SHOPPING":        ("CLICK",             "CPC",  "WEBSITE"),
+    }
+    return mapping.get(objective, ("CLICK", "CPC", "WEBSITE"))
+
+
 async def create_tiktok_campaign(advertiser_id, data):
     try:
+        import hashlib, time
         headers = {
             "Access-Token": MARKETING_TOKEN,
             "Content-Type": "application/json"
@@ -626,32 +641,45 @@ async def create_tiktok_campaign(advertiser_id, data):
             async with session.get(file_url) as resp:
                 video_bytes = await resp.read()
 
+            md5_hash = hashlib.md5(video_bytes).hexdigest()
+            form = aiohttp.FormData()
+            form.add_field("advertiser_id", advertiser_id)
+            form.add_field("upload_type", "UPLOAD_BY_FILE")
+            form.add_field("video_signature", md5_hash)
+            form.add_field(
+                "video_file", video_bytes,
+                filename=f"video_{advertiser_id}_{int(time.time())}.mp4",
+                content_type="video/mp4"
+            )
             upload_resp = await session.post(
                 f"{base_url}/file/video/ad/upload/",
-                data=aiohttp.FormData(fields=[
-                    ("advertiser_id", advertiser_id),
-                    ("video_file", video_bytes, "video.mp4"),
-                ]),
+                data=form,
                 headers={"Access-Token": MARKETING_TOKEN}
             )
             upload_data = await upload_resp.json()
             if upload_data.get("code") != 0:
                 return False, f"Ошибка загрузки видео: {upload_data.get('message')}"
-            video_id = upload_data["data"]["video_id"]
+            d = upload_data["data"]
+            video_id = d[0]["video_id"] if isinstance(d, list) else d["video_id"]
 
             # 3. Создаём группу объявлений
+            objective = data["objective"]
+            optimize_goal, billing_event, promotion_type = get_adgroup_optimization(objective)
+
             adgroup_payload = {
                 "advertiser_id": advertiser_id,
                 "campaign_id": campaign_id,
                 "adgroup_name": data["adgroup_name"],
                 "placement_type": data["placement_type"],
-                "location_ids": [data["geo"]],
+                "location_ids": [str(data["geo"])],
                 "budget_mode": data["budget_mode"],
                 "budget": data["budget"],
                 "schedule_type": "SCHEDULE_START_END" if data.get("schedule_end") else "SCHEDULE_FROM_NOW",
                 "schedule_start_time": data["schedule_start"],
-                "optimize_goal": "CLICK" if data["objective"] == "TRAFFIC" else "REACH",
-                "billing_event": "CPC" if data["objective"] == "TRAFFIC" else "CPM",
+                "optimize_goal": optimize_goal,
+                "billing_event": billing_event,
+                "promotion_type": promotion_type,
+                "bid_type": "BID_TYPE_NO_BID",
                 "pacing": "PACING_MODE_SMOOTH",
             }
             if data.get("schedule_end"):
@@ -666,7 +694,7 @@ async def create_tiktok_campaign(advertiser_id, data):
             )
             adgroup_data = await adgroup_resp.json()
             if adgroup_data.get("code") != 0:
-                return False, f"Ошибка группы объявлений: {adgroup_data.get('message')}"
+                return False, f"Ошибка группы: {adgroup_data.get('message')} | payload: {json.dumps(adgroup_payload)}"
             adgroup_id = adgroup_data["data"]["adgroup_id"]
 
             # 4. Создаём объявление
@@ -692,7 +720,8 @@ async def create_tiktok_campaign(advertiser_id, data):
             return True, f"campaign_id: {campaign_id}"
 
     except Exception as e:
-        return False, str(e)
+        import traceback
+        return False, f"{str(e)} | {traceback.format_exc()[-300:]}"
 
 loop = None
 
