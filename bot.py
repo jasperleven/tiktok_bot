@@ -707,18 +707,40 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
             adgroup_id = adgroup_data["data"]["adgroup_id"]
 
             # 4. Создаём объявление
+            # Получаем identity_id для объявления
+            identity_id = None
+            identity_type = "BC_AUTH_TT"
+            try:
+                ident_resp = await session.get(
+                    f"{base_url}/identity/get/",
+                    params={"advertiser_id": advertiser_id},
+                    headers=headers
+                )
+                ident_data = await ident_resp.json()
+                ident_list = ident_data.get("data", {}).get("identity_list", [])
+                if ident_list:
+                    identity_id = ident_list[0]["identity_id"]
+                    identity_type = ident_list[0]["identity_type"]
+            except Exception:
+                pass
+
+            creative = {
+                "ad_name": data["campaign_name"],
+                "ad_text": data["ad_text"],
+                "video_id": video_id,
+                "landing_page_url": data["ad_url"],
+                "call_to_action": "LEARN_MORE",
+            }
+            if identity_id:
+                creative["identity_id"] = identity_id
+                creative["identity_type"] = identity_type
+
             ad_resp = await session.post(
                 f"{base_url}/ad/create/",
                 json={
                     "advertiser_id": advertiser_id,
                     "adgroup_id": adgroup_id,
-                    "creatives": [{
-                        "ad_name": data["campaign_name"],
-                        "ad_text": data["ad_text"],
-                        "video_id": video_id,
-                        "landing_page_url": data["ad_url"],
-                        "call_to_action": "LEARN_MORE",
-                    }]
+                    "creatives": [creative]
                 },
                 headers=headers
             )
