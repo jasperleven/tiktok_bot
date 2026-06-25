@@ -617,7 +617,7 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
 
         # Маппинг objective для campaign/create
         OBJECTIVE_CAMPAIGN_MAP = {
-            "LEAD_GENERATION": "WEB_CONVERSIONS",
+            "LEAD_GENERATION": "LEAD_GENERATION",
             "CONVERSIONS":     "WEB_CONVERSIONS",
             "REACH":           "REACH",
             "TRAFFIC":         "TRAFFIC",
