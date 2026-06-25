@@ -387,12 +387,23 @@ async def got_objective(message: types.Message, state: FSMContext):
     if message.text not in OBJECTIVES:
         await message.answer("Выбери цель из списка 👇")
         return
-    await state.update_data(objective=OBJECTIVES[message.text], objective_name=message.text)
-    await state.set_state(CampaignStates.budget_amount)
-    await message.answer(
-        "Шаг 4/12 — Введи дневной бюджет группы объявлений (USD, минимум 20):",
-        reply_markup=ReplyKeyboardRemove()
-    )
+    objective_code = OBJECTIVES[message.text]
+    await state.update_data(objective=objective_code, objective_name=message.text)
+    if objective_code == "LEAD_GENERATION":
+        await state.update_data(video_file_id=None, ad_text=None, ad_url=None, cover_file_id=None)
+        await state.set_state(CampaignStates.budget_amount)
+        await message.answer(
+            "ℹ️ Для Лидогенерации бот создаст кампанию и группу объявлений.\n"
+            "Креатив (видео, текст, ссылку) нужно добавить вручную в Ads Manager.\n\n"
+            "Шаг 4/10 — Введи дневной бюджет группы объявлений (USD, минимум 20):",
+            reply_markup=ReplyKeyboardRemove()
+        )
+    else:
+        await state.set_state(CampaignStates.budget_amount)
+        await message.answer(
+            "Шаг 4/12 — Введи дневной бюджет группы объявлений (USD, минимум 20):",
+            reply_markup=ReplyKeyboardRemove()
+        )
 
 
 @dp.message(CampaignStates.budget_amount)
@@ -501,13 +512,26 @@ async def got_bid_amount(message: types.Message, state: FSMContext):
         await message.answer("❌ Введи число. Например: 5")
         return
     await state.update_data(bid_amount=bid)
-    await state.set_state(CampaignStates.pixel_search)
-    await message.answer(
-        "Шаг 10/12 — Введи часть названия пикселя для поиска\n"
-        "Например: `dacha` или `cool`\n\n"
-        "Или отправь /skippixel чтобы пропустить",
-        parse_mode="Markdown"
-    )
+    data = await state.get_data()
+    if data.get("objective") == "LEAD_GENERATION":
+        # Пропускаем пиксель, видео, текст, url — сразу к подтверждению
+        selected = data.get("selected_advertisers", [])
+        names = [ADVERTISERS.get(a, a) for a in selected]
+        await message.answer(
+            f"✅ Всё готово! Нажми *Создать кампанию* для запуска на {len(selected)} кабинетах:\n" +
+            "\n".join(f"• {n}" for n in names) +
+            "\n\n⚠️ После создания добавь креатив вручную в Ads Manager.",
+            parse_mode="Markdown",
+            reply_markup=build_advertisers_keyboard_final(selected)
+        )
+    else:
+        await state.set_state(CampaignStates.pixel_search)
+        await message.answer(
+            "Шаг 10/12 — Введи часть названия пикселя для поиска\n"
+            "Например: `dacha` или `cool`\n\n"
+            "Или отправь /skippixel чтобы пропустить",
+            parse_mode="Markdown"
+        )
 
 
 @dp.message(Command("skippixel"))
@@ -613,12 +637,15 @@ async def create_campaign(callback: types.CallbackQuery, state: FSMContext):
     await state.clear()
 
     video_path = None
-    try:
-        video_path = await download_video_to_hetzner(data["video_file_id"])
-        await callback.message.answer("✅ Видео загружено на сервер. Создаю кампании...")
-    except Exception as e:
-        await callback.message.answer(f"❌ Ошибка скачивания видео: {e}")
-        return
+    if data.get("video_file_id"):
+        try:
+            video_path = await download_video_to_hetzner(data["video_file_id"])
+            await callback.message.answer("✅ Видео загружено на сервер. Создаю кампании...")
+        except Exception as e:
+            await callback.message.answer(f"❌ Ошибка скачивания видео: {e}")
+            return
+    else:
+        await callback.message.answer("⏳ Создаю кампании...")
 
     for adv_id in selected:
         name = ADVERTISERS.get(adv_id, adv_id)
@@ -690,7 +717,9 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                 return False, f"Ошибка кампании: {camp_data.get('message')}"
             campaign_id = camp_data["data"]["campaign_id"]
 
-            # 2. Загружаем видео + получаем обложку
+            # 2. Загружаем видео + получаем обложку (пропускаем для LEAD_GENERATION)
+            if objective == "LEAD_GENERATION" or not video_path:
+                return True, f"campaign_id: {campaign_id} | Добавь креатив вручную в Ads Manager"
             video_id, video_cover_url = await upload_video_to_tiktok(advertiser_id, video_path)
 
             # 3. Загружаем обложку
