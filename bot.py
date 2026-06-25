@@ -628,7 +628,7 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
 
         # Маппинг для adgroup: (optimization_goal, billing_event, promotion_type)
         ADGROUP_OPT_MAP = {
-            "LEAD_GENERATION": ("LEAD",        "OCPM", "WEBSITE"),
+            "LEAD_GENERATION": ("LEADS",       "OCPM", "WEBSITE"),
             "CONVERSIONS":     ("CONVERT",     "OCPM", "WEBSITE"),
             "REACH":           ("REACH",       "CPM",  "WEBSITE"),
             "TRAFFIC":         ("CLICK",       "CPC",  "WEBSITE"),
