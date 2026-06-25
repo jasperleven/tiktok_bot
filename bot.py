@@ -103,7 +103,6 @@ class CampaignStates(StatesGroup):
     pixel_search       = State()
     pixel_select       = State()
     video_upload       = State()
-    cover_upload       = State()
     ad_text            = State()
     ad_url             = State()
 
@@ -515,7 +514,7 @@ async def got_bid_amount(message: types.Message, state: FSMContext):
 async def skip_pixel(message: types.Message, state: FSMContext):
     await state.update_data(pixel_id=None)
     await state.set_state(CampaignStates.video_upload)
-    await message.answer("Шаг 11/13 — Отправь видео для рекламного объявления:")
+    await message.answer("Шаг 11/12 — Отправь видео для рекламного объявления:")
 
 
 @dp.message(CampaignStates.pixel_search)
@@ -556,7 +555,7 @@ async def got_pixel_select(callback: types.CallbackQuery, state: FSMContext):
     await state.update_data(pixel_id=pixel_id)
     await callback.message.answer(f"✅ Пиксель выбран: `{pixel_id}`", parse_mode="Markdown")
     await state.set_state(CampaignStates.video_upload)
-    await callback.message.answer("Шаг 11/13 — Отправь видео для рекламного объявления:")
+    await callback.message.answer("Шаг 11/12 — Отправь видео для рекламного объявления:")
     await callback.answer()
 
 
@@ -564,39 +563,16 @@ async def got_pixel_select(callback: types.CallbackQuery, state: FSMContext):
 async def skip_pixel_callback(callback: types.CallbackQuery, state: FSMContext):
     await state.update_data(pixel_id=None)
     await state.set_state(CampaignStates.video_upload)
-    await callback.message.answer("Шаг 11/13 — Отправь видео для рекламного объявления:")
+    await callback.message.answer("Шаг 11/12 — Отправь видео для рекламного объявления:")
     await callback.answer()
 
 
 @dp.message(CampaignStates.video_upload, F.video | F.document)
 async def got_campaign_video(message: types.Message, state: FSMContext):
     file_id = message.document.file_id if message.document else message.video.file_id
-    await state.update_data(video_file_id=file_id)
-    await state.set_state(CampaignStates.cover_upload)
-    await message.answer(
-        "✅ Видео получено!\n\n"
-        "Шаг 12/13 — Отправь превью (обложку) для объявления\n"
-        "Формат: JPG или PNG, минимум 540×960px\n\n"
-        "Или отправь /skipcover чтобы пропустить"
-    )
-
-
-@dp.message(Command("skipcover"))
-async def skip_cover(message: types.Message, state: FSMContext):
-    await state.update_data(cover_file_id=None)
+    await state.update_data(video_file_id=file_id, cover_file_id=None)
     await state.set_state(CampaignStates.ad_text)
-    await message.answer("Шаг 13/13 — Текст объявления (до 100 символов):")
-
-
-@dp.message(CampaignStates.cover_upload, F.photo | F.document)
-async def got_cover(message: types.Message, state: FSMContext):
-    if message.photo:
-        file_id = message.photo[-1].file_id
-    else:
-        file_id = message.document.file_id
-    await state.update_data(cover_file_id=file_id)
-    await state.set_state(CampaignStates.ad_text)
-    await message.answer("✅ Превью получено!\n\nШаг 13/13 — Текст объявления (до 100 символов):")
+    await message.answer("✅ Видео получено!\n\nШаг 12/12 — Текст объявления (до 100 символов):")
 
 
 @dp.message(CampaignStates.ad_text)
@@ -719,31 +695,7 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
 
             # 3. Загружаем обложку
             image_id = None
-            if data.get("cover_file_id"):
-                # Пользователь загрузил обложку вручную
-                try:
-                    import hashlib
-                    cover_file = await bot.get_file(data["cover_file_id"])
-                    cover_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{cover_file.file_path}"
-                    async with session.get(cover_url) as cover_resp:
-                        cover_bytes = await cover_resp.read()
-                    cover_form = aiohttp.FormData()
-                    cover_form.add_field("advertiser_id", advertiser_id)
-                    cover_form.add_field("upload_type", "UPLOAD_BY_FILE")
-                    cover_form.add_field("image_signature", hashlib.md5(cover_bytes).hexdigest())
-                    cover_form.add_field("image_file", cover_bytes, filename="cover.jpg", content_type="image/jpeg")
-                    cover_resp2 = await session.post(
-                        f"{base_url}/file/image/ad/upload/",
-                        data=cover_form,
-                        headers={"Access-Token": MARKETING_TOKEN}
-                    )
-                    cover_data = await cover_resp2.json()
-                    await log_api("COVER UPLOAD", {"advertiser_id": advertiser_id, "cover_file_id": data["cover_file_id"]}, cover_data)
-                    if cover_data.get("code") == 0:
-                        image_id = cover_data["data"].get("image_id")
-                except Exception as e:
-                    await log_api("COVER UPLOAD ERROR", {}, {"error": str(e)})
-            elif video_cover_url:
+            if video_cover_url:
                 image_id = await upload_cover_to_tiktok(advertiser_id, video_cover_url)
 
             # 4. Создаём группу объявлений
