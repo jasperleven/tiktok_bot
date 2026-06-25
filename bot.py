@@ -221,16 +221,22 @@ async def upload_video_to_tiktok(advertiser_id, video_path):
 
         # Если обложка не пришла — ждём обработки и ищем через video search
         if not video_cover_url and video_id:
-            await asyncio.sleep(8)
+            await asyncio.sleep(10)
             try:
                 search_resp = await session.get(
                     "https://business-api.tiktok.com/open_api/v1.3/file/video/ad/search/",
-                    params={"advertiser_id": advertiser_id, "video_ids": json.dumps([video_id])},
+                    params={"advertiser_id": advertiser_id, "page_size": 1},
                     headers={"Access-Token": MARKETING_TOKEN}
                 )
                 search_data = await search_resp.json()
                 videos = search_data.get("data", {}).get("list", [])
-                if videos:
+                # Ищем именно наше видео
+                for v in videos:
+                    if v.get("video_id") == video_id:
+                        video_cover_url = v.get("video_cover_url")
+                        break
+                # Если не нашли — берём первое
+                if not video_cover_url and videos:
                     video_cover_url = videos[0].get("video_cover_url")
             except Exception:
                 pass
