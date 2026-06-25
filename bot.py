@@ -628,13 +628,13 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
 
         # Маппинг для adgroup: (optimization_goal, billing_event, promotion_type)
         ADGROUP_OPT_MAP = {
-            "LEAD_GENERATION": ("LEADS",       "OCPM", "WEBSITE"),
-            "CONVERSIONS":     ("CONVERT",     "OCPM", "WEBSITE"),
-            "REACH":           ("REACH",       "CPM",  "WEBSITE"),
-            "TRAFFIC":         ("CLICK",       "CPC",  "WEBSITE"),
-            "VIDEO_VIEWS":     ("VIDEO_PLAY",  "CPV",  "WEBSITE"),
-            "APP_PROMOTION":   ("INSTALL",     "OCPM", "APP"),
-            "SHOPPING":        ("CLICK",       "CPC",  "WEBSITE"),
+            "LEAD_GENERATION": ("LEAD_GENERATION", "OCPM", "LEAD_GENERATION"),
+            "CONVERSIONS":     ("CONVERT",         "OCPM", "WEBSITE"),
+            "REACH":           ("REACH",           "CPM",  "WEBSITE"),
+            "TRAFFIC":         ("CLICK",           "CPC",  "WEBSITE"),
+            "VIDEO_VIEWS":     ("VIDEO_PLAY",      "CPV",  "WEBSITE"),
+            "APP_PROMOTION":   ("INSTALL",         "OCPM", "APP"),
+            "SHOPPING":        ("CLICK",           "CPC",  "WEBSITE"),
         }
 
         async with aiohttp.ClientSession() as session:
@@ -686,7 +686,11 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
             if data["placement_type"] == "PLACEMENT_TYPE_NORMAL":
                 adgroup_payload["placements"] = data["placements"]
 
-            if data.get("bid_type") == "manual" and data.get("bid_amount"):
+            if objective == "LEAD_GENERATION":
+                # LEAD_GENERATION требует обязательную ставку
+                adgroup_payload["bid_type"] = "BID_TYPE_CUSTOM"
+                adgroup_payload["conversion_bid_price"] = data.get("bid_amount") or 5.0
+            elif data.get("bid_type") == "manual" and data.get("bid_amount"):
                 adgroup_payload["bid_type"] = "BID_TYPE_CUSTOM"
                 adgroup_payload["bid_price"] = data["bid_amount"]
             else:
