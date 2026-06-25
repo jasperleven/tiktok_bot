@@ -219,8 +219,9 @@ async def upload_video_to_tiktok(advertiser_id, video_path):
         video_id = item.get("video_id")
         video_cover_url = item.get("video_cover_url")
 
-        # Если обложка не пришла — ищем через video search
+        # Если обложка не пришла — ждём обработки и ищем через video search
         if not video_cover_url and video_id:
+            await asyncio.sleep(8)
             try:
                 search_resp = await session.get(
                     "https://business-api.tiktok.com/open_api/v1.3/file/video/ad/search/",
@@ -715,6 +716,7 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
             if data.get("cover_file_id"):
                 # Пользователь загрузил обложку вручную
                 try:
+                    import hashlib
                     cover_file = await bot.get_file(data["cover_file_id"])
                     cover_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{cover_file.file_path}"
                     async with session.get(cover_url) as cover_resp:
@@ -722,7 +724,6 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                     cover_form = aiohttp.FormData()
                     cover_form.add_field("advertiser_id", advertiser_id)
                     cover_form.add_field("upload_type", "UPLOAD_BY_FILE")
-                    import hashlib
                     cover_form.add_field("image_signature", hashlib.md5(cover_bytes).hexdigest())
                     cover_form.add_field("image_file", cover_bytes, filename="cover.jpg", content_type="image/jpeg")
                     cover_resp2 = await session.post(
@@ -731,10 +732,11 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                         headers={"Access-Token": MARKETING_TOKEN}
                     )
                     cover_data = await cover_resp2.json()
+                    await log_api("COVER UPLOAD", {"advertiser_id": advertiser_id, "cover_file_id": data["cover_file_id"]}, cover_data)
                     if cover_data.get("code") == 0:
                         image_id = cover_data["data"].get("image_id")
-                except Exception:
-                    pass
+                except Exception as e:
+                    await log_api("COVER UPLOAD ERROR", {}, {"error": str(e)})
             elif video_cover_url:
                 image_id = await upload_cover_to_tiktok(advertiser_id, video_cover_url)
 
