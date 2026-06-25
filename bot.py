@@ -730,6 +730,7 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                 "video_id": video_id,
                 "landing_page_url": data["ad_url"],
                 "call_to_action": "LEARN_MORE",
+                "ad_format": "SINGLE_VIDEO",
             }
             if identity_id:
                 creative["identity_id"] = identity_id
