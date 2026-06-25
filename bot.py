@@ -735,6 +735,7 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
             if identity_id:
                 creative["identity_id"] = identity_id
                 creative["identity_type"] = identity_type
+                creative["identity_authorized_bc_id"] = ident_list[0].get("identity_authorized_bc_id", "")
 
             ad_resp = await session.post(
                 f"{base_url}/ad/create/",
