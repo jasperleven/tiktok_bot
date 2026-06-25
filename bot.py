@@ -565,8 +565,31 @@ async def skip_pixel_callback(callback: types.CallbackQuery, state: FSMContext):
 async def got_campaign_video(message: types.Message, state: FSMContext):
     file_id = message.document.file_id if message.document else message.video.file_id
     await state.update_data(video_file_id=file_id)
+    await state.set_state(CampaignStates.cover_upload)
+    await message.answer(
+        "✅ Видео получено!\n\n"
+        "Шаг 12/13 — Отправь превью (обложку) для объявления\n"
+        "Формат: JPG или PNG, минимум 540×960px\n\n"
+        "Или отправь /skipcover чтобы пропустить"
+    )
+
+
+@dp.message(Command("skipcover"))
+async def skip_cover(message: types.Message, state: FSMContext):
+    await state.update_data(cover_file_id=None)
     await state.set_state(CampaignStates.ad_text)
-    await message.answer("✅ Видео получено!\n\nТекст объявления (до 100 символов):")
+    await message.answer("Шаг 13/13 — Текст объявления (до 100 символов):")
+
+
+@dp.message(CampaignStates.cover_upload, F.photo | F.document)
+async def got_cover(message: types.Message, state: FSMContext):
+    if message.photo:
+        file_id = message.photo[-1].file_id
+    else:
+        file_id = message.document.file_id
+    await state.update_data(cover_file_id=file_id)
+    await state.set_state(CampaignStates.ad_text)
+    await message.answer("✅ Превью получено!\n\nШаг 13/13 — Текст объявления (до 100 символов):")
 
 
 @dp.message(CampaignStates.ad_text)
