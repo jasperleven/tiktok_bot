@@ -638,6 +638,18 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
         }
 
         async with aiohttp.ClientSession() as session:
+            # 0. Определяем тип кабинета
+            adv_resp = await session.get(
+                f"{base_url}/campaign/get/",
+                params={"advertiser_id": advertiser_id, "page_size": 1},
+                headers=headers
+            )
+            adv_data = await adv_resp.json()
+            is_smart_plus = False
+            campaigns_list = adv_data.get("data", {}).get("list", [])
+            if campaigns_list:
+                is_smart_plus = campaigns_list[0].get("campaign_automation_type") == "UPGRADED_SMART_PLUS"
+
             # 1. Создаём кампанию
             objective = data["objective"]
             campaign_objective = OBJECTIVE_CAMPAIGN_MAP.get(objective, objective)
@@ -647,6 +659,9 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                 "campaign_name": data["campaign_name"],
                 "objective_type": campaign_objective,
             }
+            if is_smart_plus:
+                camp_payload["campaign_type"] = "SMART_PERFORMANCE_CAMPAIGN"
+
             if budget_level == "campaign":
                 camp_payload["budget_mode"] = data["budget_mode"]
                 camp_payload["budget"] = data["budget"]
