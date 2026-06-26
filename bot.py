@@ -284,6 +284,16 @@ async def get_identity(advertiser_id, session, base_url, headers):
     return None
 
 
+def get_adgroup_deeplink(advertiser_id: str, campaign_id: str, adgroup_id: str) -> str:
+    """Deeplink прямо в adgroup в TikTok Ads Manager"""
+    return (
+        f"https://ads.tiktok.com/i18n/perf/adgroup"
+        f"?aadvid={advertiser_id}"
+        f"&campaignId={campaign_id}"
+        f"&adgroupId={adgroup_id}"
+    )
+
+
 async def log_api(step, payload, response):
     import datetime
     with open("/tmp/tiktok_api.log", "a") as f:
@@ -513,19 +523,15 @@ async def got_bid_amount(message: types.Message, state: FSMContext):
         return
     await state.update_data(bid_amount=bid)
     data = await state.get_data()
+    await state.set_state(CampaignStates.pixel_search)
     if data.get("objective") == "LEAD_GENERATION":
-        # Пропускаем пиксель, видео, текст, url — сразу к подтверждению
-        selected = data.get("selected_advertisers", [])
-        names = [ADVERTISERS.get(a, a) for a in selected]
         await message.answer(
-            f"✅ Всё готово! Нажми *Создать кампанию* для запуска на {len(selected)} кабинетах:\n" +
-            "\n".join(f"• {n}" for n in names) +
-            "\n\n⚠️ После создания добавь креатив вручную в Ads Manager.",
-            parse_mode="Markdown",
-            reply_markup=build_advertisers_keyboard_final(selected)
+            "Шаг 10/11 — Введи часть названия пикселя для поиска\n"
+            "Например: `dacha` или `cool`\n\n"
+            "Или отправь /skippixel чтобы пропустить",
+            parse_mode="Markdown"
         )
     else:
-        await state.set_state(CampaignStates.pixel_search)
         await message.answer(
             "Шаг 10/12 — Введи часть названия пикселя для поиска\n"
             "Например: `dacha` или `cool`\n\n"
@@ -537,8 +543,20 @@ async def got_bid_amount(message: types.Message, state: FSMContext):
 @dp.message(Command("skippixel"))
 async def skip_pixel(message: types.Message, state: FSMContext):
     await state.update_data(pixel_id=None)
-    await state.set_state(CampaignStates.video_upload)
-    await message.answer("Шаг 11/12 — Отправь видео для рекламного объявления:")
+    data = await state.get_data()
+    if data.get("objective") == "LEAD_GENERATION":
+        selected = data.get("selected_advertisers", [])
+        names = [ADVERTISERS.get(a, a) for a in selected]
+        await message.answer(
+            f"✅ Всё готово! Нажми *Создать кампанию* для запуска на {len(selected)} кабинетах:\n" +
+            "\n".join(f"• {n}" for n in names) +
+            "\n\n⚠️ После создания добавь креатив вручную в Ads Manager.",
+            parse_mode="Markdown",
+            reply_markup=build_advertisers_keyboard_final(selected)
+        )
+    else:
+        await state.set_state(CampaignStates.video_upload)
+        await message.answer("Шаг 11/12 — Отправь видео для рекламного объявления:")
 
 
 @dp.message(CampaignStates.pixel_search)
@@ -578,16 +596,40 @@ async def got_pixel_select(callback: types.CallbackQuery, state: FSMContext):
     pixel_id = callback.data.replace("pixel_", "")
     await state.update_data(pixel_id=pixel_id)
     await callback.message.answer(f"✅ Пиксель выбран: `{pixel_id}`", parse_mode="Markdown")
-    await state.set_state(CampaignStates.video_upload)
-    await callback.message.answer("Шаг 11/12 — Отправь видео для рекламного объявления:")
+    data = await state.get_data()
+    if data.get("objective") == "LEAD_GENERATION":
+        selected = data.get("selected_advertisers", [])
+        names = [ADVERTISERS.get(a, a) for a in selected]
+        await callback.message.answer(
+            f"✅ Всё готово! Нажми *Создать кампанию* для запуска на {len(selected)} кабинетах:\n" +
+            "\n".join(f"• {n}" for n in names) +
+            "\n\n⚠️ После создания добавь креатив вручную в Ads Manager.",
+            parse_mode="Markdown",
+            reply_markup=build_advertisers_keyboard_final(selected)
+        )
+    else:
+        await state.set_state(CampaignStates.video_upload)
+        await callback.message.answer("Шаг 11/12 — Отправь видео для рекламного объявления:")
     await callback.answer()
 
 
 @dp.callback_query(F.data == "pixel_skip")
 async def skip_pixel_callback(callback: types.CallbackQuery, state: FSMContext):
     await state.update_data(pixel_id=None)
-    await state.set_state(CampaignStates.video_upload)
-    await callback.message.answer("Шаг 11/12 — Отправь видео для рекламного объявления:")
+    data = await state.get_data()
+    if data.get("objective") == "LEAD_GENERATION":
+        selected = data.get("selected_advertisers", [])
+        names = [ADVERTISERS.get(a, a) for a in selected]
+        await callback.message.answer(
+            f"✅ Всё готово! Нажми *Создать кампанию* для запуска на {len(selected)} кабинетах:\n" +
+            "\n".join(f"• {n}" for n in names) +
+            "\n\n⚠️ После создания добавь креатив вручную в Ads Manager.",
+            parse_mode="Markdown",
+            reply_markup=build_advertisers_keyboard_final(selected)
+        )
+    else:
+        await state.set_state(CampaignStates.video_upload)
+        await callback.message.answer("Шаг 11/12 — Отправь видео для рекламного объявления:")
     await callback.answer()
 
 
@@ -628,12 +670,13 @@ async def create_campaign(callback: types.CallbackQuery, state: FSMContext):
         await callback.answer("Выбери хотя бы один кабинет!", show_alert=True)
         return
 
-    await callback.message.answer(
+    is_lead_gen = data.get("objective") == "LEAD_GENERATION"
+    start_msg = (
         f"⏳ Создаю кампанию *{data['campaign_name']}*\n"
         f"На {len(selected)} кабинетах...\n\n"
-        f"Скачиваю видео на сервер...",
-        parse_mode="Markdown"
+        + ("Создаю структуру (кампания + группа)..." if is_lead_gen else "Скачиваю видео на сервер...")
     )
+    await callback.message.answer(start_msg, parse_mode="Markdown")
     await state.clear()
 
     video_path = None
@@ -644,20 +687,43 @@ async def create_campaign(callback: types.CallbackQuery, state: FSMContext):
         except Exception as e:
             await callback.message.answer(f"❌ Ошибка скачивания видео: {e}")
             return
-    else:
+    elif not is_lead_gen:
         await callback.message.answer("⏳ Создаю кампании...")
 
     for adv_id in selected:
         name = ADVERTISERS.get(adv_id, adv_id)
-        success, msg = await create_tiktok_campaign(adv_id, data, video_path)
-        status = "✅" if success else "❌"
-        result_text = f"{status} *{name}*\n`{msg}`"
-        for _ in range(5):
-            try:
-                await callback.message.answer(result_text, parse_mode="Markdown")
-                break
-            except Exception:
-                await asyncio.sleep(3)
+        success, result = await create_tiktok_campaign(adv_id, data, video_path)
+
+        if success and isinstance(result, dict) and result.get("deeplink"):
+            # LEAD_GENERATION — deeplink кнопка прямо в adgroup
+            campaign_id = result["campaign_id"]
+            adgroup_id  = result["adgroup_id"]
+            deeplink    = result["deeplink"]
+            result_text = (
+                f"✅ *{name}*\n"
+                f"📋 campaign: `{campaign_id}`\n"
+                f"📁 adgroup: `{adgroup_id}`\n"
+                f"👇 Добавь креатив:"
+            )
+            kb = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="🎨 Открыть в Ads Manager", url=deeplink)
+            ]])
+            for _ in range(5):
+                try:
+                    await callback.message.answer(result_text, parse_mode="Markdown", reply_markup=kb)
+                    break
+                except Exception:
+                    await asyncio.sleep(3)
+        else:
+            status = "✅" if success else "❌"
+            msg = result if isinstance(result, str) else str(result)
+            result_text = f"{status} *{name}*\n`{msg}`"
+            for _ in range(5):
+                try:
+                    await callback.message.answer(result_text, parse_mode="Markdown")
+                    break
+                except Exception:
+                    await asyncio.sleep(3)
 
     if video_path and os.path.exists(video_path):
         os.remove(video_path)
@@ -717,9 +783,49 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                 return False, f"Ошибка кампании: {camp_data.get('message')}"
             campaign_id = camp_data["data"]["campaign_id"]
 
-            # 2. Загружаем видео + получаем обложку (пропускаем для LEAD_GENERATION)
-            if objective == "LEAD_GENERATION" or not video_path:
-                return True, f"campaign_id: {campaign_id} | Добавь креатив вручную в Ads Manager"
+            # 2. Для LEAD_GENERATION — создаём adgroup и возвращаем deeplink
+            if objective == "LEAD_GENERATION":
+                optimize_goal, billing_event, promotion_type = ADGROUP_OPT_MAP["LEAD_GENERATION"]
+                adgroup_payload = {
+                    "advertiser_id": advertiser_id,
+                    "campaign_id": campaign_id,
+                    "adgroup_name": data["adgroup_name"],
+                    "placement_type": data["placement_type"],
+                    "location_ids": [str(data["geo"])],
+                    "schedule_type": "SCHEDULE_START_END" if data.get("schedule_end") else "SCHEDULE_FROM_NOW",
+                    "schedule_start_time": data["schedule_start"],
+                    "optimization_goal": optimize_goal,
+                    "billing_event": billing_event,
+                    "promotion_type": promotion_type,
+                    "budget_mode": data["budget_mode"],
+                    "budget": data["budget"],
+                    "bid_type": "BID_TYPE_CUSTOM",
+                    "conversion_bid_price": data.get("bid_amount", 5.0),
+                }
+                if data.get("schedule_end"):
+                    adgroup_payload["schedule_end_time"] = data["schedule_end"]
+                if data["placement_type"] == "PLACEMENT_TYPE_NORMAL":
+                    adgroup_payload["placements"] = data["placements"]
+                if data.get("pixel_id"):
+                    adgroup_payload["pixel_id"] = data["pixel_id"]
+
+                adgroup_resp = await session.post(f"{base_url}/adgroup/create/", json=adgroup_payload, headers=headers)
+                adgroup_data = await adgroup_resp.json()
+                await log_api("ADGROUP CREATE (LEAD_GEN)", adgroup_payload, adgroup_data)
+                if adgroup_data.get("code") != 0:
+                    return False, f"Ошибка группы: {adgroup_data.get('message')}"
+                adgroup_id = adgroup_data["data"]["adgroup_id"]
+
+                deeplink = get_adgroup_deeplink(advertiser_id, campaign_id, adgroup_id)
+                return True, {
+                    "campaign_id": campaign_id,
+                    "adgroup_id": adgroup_id,
+                    "deeplink": deeplink,
+                    "advertiser_name": ADVERTISERS.get(advertiser_id, advertiser_id),
+                }
+
+            if not video_path:
+                return False, "Видео не было загружено"
             video_id, video_cover_url = await upload_video_to_tiktok(advertiser_id, video_path)
 
             # 3. Загружаем обложку
