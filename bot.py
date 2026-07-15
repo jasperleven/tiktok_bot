@@ -943,17 +943,21 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
 
                 # Если обложки нет — ждём и ищем
                 if not video_cover_url:
-                    await asyncio.sleep(10)
-                    search_resp = await session.get(
-                        f"{base_url}/file/video/ad/search/",
-                        params={"advertiser_id": advertiser_id, "page_size": 10},
-                        headers=headers
-                    )
-                    search_data = await search_resp.json()
-                    for v in search_data.get("data", {}).get("list", []):
-                        if v.get("video_id") == video_id:
-                            video_cover_url = v.get("video_cover_url")
+                    await asyncio.sleep(15)
+                    for _ in range(5):
+                        search_resp = await session.get(
+                            f"{base_url}/file/video/ad/search/",
+                            params={"advertiser_id": advertiser_id, "page_size": 20},
+                            headers=headers
+                        )
+                        search_data = await search_resp.json()
+                        for v in search_data.get("data", {}).get("list", []):
+                            if v.get("video_id") == video_id:
+                                video_cover_url = v.get("video_cover_url")
+                                break
+                        if video_cover_url:
                             break
+                        await asyncio.sleep(5)
 
                 # 2. Загружаем обложку
                 web_uri = None
@@ -966,6 +970,27 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                     cover_data = await cover_resp.json()
                     if cover_data.get("code") == 0:
                         web_uri = cover_data["data"]["image_id"]
+
+                if not web_uri:
+                    # Берём обложку от любого другого видео в библиотеке
+                    search_resp = await session.get(
+                        f"{base_url}/file/video/ad/search/",
+                        params={"advertiser_id": advertiser_id, "page_size": 5},
+                        headers=headers
+                    )
+                    search_data = await search_resp.json()
+                    for v in search_data.get("data", {}).get("list", []):
+                        fallback_cover = v.get("video_cover_url")
+                        if fallback_cover:
+                            cover_resp = await session.post(
+                                f"{base_url}/file/image/ad/upload/",
+                                json={"advertiser_id": advertiser_id, "upload_type": "UPLOAD_BY_URL", "image_url": fallback_cover},
+                                headers=headers
+                            )
+                            cover_data = await cover_resp.json()
+                            if cover_data.get("code") == 0:
+                                web_uri = cover_data["data"]["image_id"]
+                                break
 
                 if not web_uri:
                     return False, "Не удалось загрузить обложку видео"
