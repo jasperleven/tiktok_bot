@@ -833,11 +833,13 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                 identity_bc_id = identity.get("identity_authorized_bc_id", "")
 
                 # Создаём кампанию через Smart+ API
+                import uuid
                 sp_camp_payload = {
                     "advertiser_id": advertiser_id,
                     "campaign_name": data["campaign_name"],
                     "objective_type": "LEAD_GENERATION",
                     "budget": data["budget"],
+                    "request_id": str(uuid.uuid4()),
                 }
                 sp_camp_resp = await session.post(f"{base_url}/smart_plus/campaign/create/", json=sp_camp_payload, headers=headers)
                 sp_camp_data = await sp_camp_resp.json()
@@ -863,6 +865,7 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                     "targeting_spec": {
                         "location_ids": [str(data["geo"])],
                     },
+                    "request_id": str(uuid.uuid4()),
                 }
                 if data.get("schedule_end"):
                     sp_adgroup_payload["schedule_end_time"] = data["schedule_end"]
