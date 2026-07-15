@@ -105,6 +105,7 @@ class CampaignStates(StatesGroup):
     video_upload       = State()
     ad_text            = State()
     ad_url             = State()
+    tiktok_post        = State()
 
 
 class HealthHandler(BaseHTTPRequestHandler):
@@ -282,6 +283,29 @@ async def get_identity(advertiser_id, session, base_url, headers):
     except Exception:
         pass
     return None
+
+
+async def get_tiktok_posts(advertiser_id, identity_id, identity_authorized_bc_id):
+    """Получает список постов из TikTok аккаунта для Spark Ads"""
+    try:
+        async with aiohttp.ClientSession() as session:
+            resp = await session.get(
+                "https://business-api.tiktok.com/open_api/v1.3/identity/video/get/",
+                params={
+                    "advertiser_id": advertiser_id,
+                    "identity_type": "BC_AUTH_TT",
+                    "identity_id": identity_id,
+                    "identity_authorized_bc_id": identity_authorized_bc_id,
+                    "page_size": 20,
+                },
+                headers={"Access-Token": MARKETING_TOKEN}
+            )
+            data = await resp.json()
+            if data.get("code") != 0:
+                return []
+            return data.get("data", {}).get("video_list", [])
+    except Exception:
+        return []
 
 
 def get_adgroup_deeplink(advertiser_id: str, campaign_id: str, adgroup_id: str) -> str:
@@ -540,20 +564,59 @@ async def got_bid_amount(message: types.Message, state: FSMContext):
         )
 
 
+async def show_tiktok_posts(message_or_callback, state: FSMContext):
+    """Загружает и показывает список TikTok постов для выбора"""
+    data = await state.get_data()
+    selected = data.get("selected_advertisers", [])
+    adv_id = selected[0] if selected else list(ADVERTISERS.keys())[0]
+
+    msg = message_or_callback if isinstance(message_or_callback, types.Message) else message_or_callback.message
+    await msg.answer("🔍 Загружаю посты из TikTok аккаунта...")
+
+    identity = None
+    async with aiohttp.ClientSession() as session:
+        headers = {"Access-Token": MARKETING_TOKEN}
+        resp = await session.get(
+            "https://business-api.tiktok.com/open_api/v1.3/identity/get/",
+            params={"advertiser_id": adv_id},
+            headers=headers
+        )
+        idata = await resp.json()
+        ident_list = idata.get("data", {}).get("identity_list", [])
+        if ident_list:
+            identity = ident_list[0]
+
+    if not identity:
+        await msg.answer("❌ Не найден TikTok аккаунт для кабинета. Проверь настройки identity.")
+        return
+
+    identity_id = identity["identity_id"]
+    identity_bc_id = identity.get("identity_authorized_bc_id", "")
+    await state.update_data(identity_id=identity_id, identity_bc_id=identity_bc_id)
+
+    posts = await get_tiktok_posts(adv_id, identity_id, identity_bc_id)
+
+    if not posts:
+        await msg.answer("❌ Посты не найдены. Убедись что TikTok аккаунт подключён и имеет опубликованные видео.")
+        return
+
+    rows = []
+    for p in posts[:15]:
+        item_id = p["item_id"]
+        text = p.get("text", "")[:50] or item_id
+        rows.append([InlineKeyboardButton(text=f"🎬 {text}", callback_data=f"post_{item_id}")])
+
+    kb = InlineKeyboardMarkup(inline_keyboard=rows)
+    await msg.answer("Выбери TikTok пост для объявления:", reply_markup=kb)
+    await state.set_state(CampaignStates.tiktok_post)
+
+
 @dp.message(Command("skippixel"))
 async def skip_pixel(message: types.Message, state: FSMContext):
     await state.update_data(pixel_id=None)
     data = await state.get_data()
     if data.get("objective") == "LEAD_GENERATION":
-        selected = data.get("selected_advertisers", [])
-        names = [ADVERTISERS.get(a, a) for a in selected]
-        await message.answer(
-            f"✅ Всё готово! Нажми *Создать кампанию* для запуска на {len(selected)} кабинетах:\n" +
-            "\n".join(f"• {n}" for n in names) +
-            "\n\n⚠️ После создания добавь креатив вручную в Ads Manager.",
-            parse_mode="Markdown",
-            reply_markup=build_advertisers_keyboard_final(selected)
-        )
+        await show_tiktok_posts(message, state)
     else:
         await state.set_state(CampaignStates.video_upload)
         await message.answer("Шаг 11/12 — Отправь видео для рекламного объявления:")
@@ -598,15 +661,7 @@ async def got_pixel_select(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.answer(f"✅ Пиксель выбран: `{pixel_id}`", parse_mode="Markdown")
     data = await state.get_data()
     if data.get("objective") == "LEAD_GENERATION":
-        selected = data.get("selected_advertisers", [])
-        names = [ADVERTISERS.get(a, a) for a in selected]
-        await callback.message.answer(
-            f"✅ Всё готово! Нажми *Создать кампанию* для запуска на {len(selected)} кабинетах:\n" +
-            "\n".join(f"• {n}" for n in names) +
-            "\n\n⚠️ После создания добавь креатив вручную в Ads Manager.",
-            parse_mode="Markdown",
-            reply_markup=build_advertisers_keyboard_final(selected)
-        )
+        await show_tiktok_posts(callback, state)
     else:
         await state.set_state(CampaignStates.video_upload)
         await callback.message.answer("Шаг 11/12 — Отправь видео для рекламного объявления:")
@@ -618,18 +673,19 @@ async def skip_pixel_callback(callback: types.CallbackQuery, state: FSMContext):
     await state.update_data(pixel_id=None)
     data = await state.get_data()
     if data.get("objective") == "LEAD_GENERATION":
-        selected = data.get("selected_advertisers", [])
-        names = [ADVERTISERS.get(a, a) for a in selected]
-        await callback.message.answer(
-            f"✅ Всё готово! Нажми *Создать кампанию* для запуска на {len(selected)} кабинетах:\n" +
-            "\n".join(f"• {n}" for n in names) +
-            "\n\n⚠️ После создания добавь креатив вручную в Ads Manager.",
-            parse_mode="Markdown",
-            reply_markup=build_advertisers_keyboard_final(selected)
-        )
+        await show_tiktok_posts(callback, state)
     else:
         await state.set_state(CampaignStates.video_upload)
         await callback.message.answer("Шаг 11/12 — Отправь видео для рекламного объявления:")
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("post_"))
+async def got_tiktok_post(callback: types.CallbackQuery, state: FSMContext):
+    item_id = callback.data.replace("post_", "")
+    await state.update_data(tiktok_item_id=item_id)
+    await callback.message.answer(f"✅ Пост выбран: `{item_id}`\n\nВведи текст объявления (до 100 символов):", parse_mode="Markdown")
+    await state.set_state(CampaignStates.ad_text)
     await callback.answer()
 
 
@@ -654,9 +710,12 @@ async def got_ad_url(message: types.Message, state: FSMContext):
     data = await state.get_data()
     selected = data.get("selected_advertisers", [])
     names = [ADVERTISERS.get(a, a) for a in selected]
+    suffix = ""
+    if data.get("objective") == "LEAD_GENERATION" and data.get("tiktok_item_id"):
+        suffix = f"\n\n🎬 Пост: `{data['tiktok_item_id']}`"
     await message.answer(
         f"✅ Всё готово! Нажми *Создать кампанию* для запуска на {len(selected)} кабинетах:\n" +
-        "\n".join(f"• {n}" for n in names),
+        "\n".join(f"• {n}" for n in names) + suffix,
         parse_mode="Markdown",
         reply_markup=build_advertisers_keyboard_final(selected)
     )
@@ -694,36 +753,15 @@ async def create_campaign(callback: types.CallbackQuery, state: FSMContext):
         name = ADVERTISERS.get(adv_id, adv_id)
         success, result = await create_tiktok_campaign(adv_id, data, video_path)
 
-        if success and isinstance(result, dict) and result.get("deeplink"):
-            # LEAD_GENERATION — deeplink кнопка прямо в adgroup
-            campaign_id = result["campaign_id"]
-            adgroup_id  = result["adgroup_id"]
-            deeplink    = result["deeplink"]
-            result_text = (
-                f"✅ *{name}*\n"
-                f"📋 campaign: `{campaign_id}`\n"
-                f"📁 adgroup: `{adgroup_id}`\n"
-                f"👇 Добавь креатив:"
-            )
-            kb = InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text="🎨 Открыть в Ads Manager", url=deeplink)
-            ]])
-            for _ in range(5):
-                try:
-                    await callback.message.answer(result_text, parse_mode="Markdown", reply_markup=kb)
-                    break
-                except Exception:
-                    await asyncio.sleep(3)
-        else:
-            status = "✅" if success else "❌"
-            msg = result if isinstance(result, str) else str(result)
-            result_text = f"{status} *{name}*\n`{msg}`"
-            for _ in range(5):
-                try:
-                    await callback.message.answer(result_text, parse_mode="Markdown")
-                    break
-                except Exception:
-                    await asyncio.sleep(3)
+        status = "✅" if success else "❌"
+        msg = result if isinstance(result, str) else str(result)
+        result_text = f"{status} *{name}*\n`{msg}`"
+        for _ in range(5):
+            try:
+                await callback.message.answer(result_text, parse_mode="Markdown")
+                break
+            except Exception:
+                await asyncio.sleep(3)
 
     if video_path and os.path.exists(video_path):
         os.remove(video_path)
@@ -783,46 +821,92 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                 return False, f"Ошибка кампании: {camp_data.get('message')}"
             campaign_id = camp_data["data"]["campaign_id"]
 
-            # 2. Для LEAD_GENERATION — создаём adgroup и возвращаем deeplink
+            # 2. Для LEAD_GENERATION — используем Smart+ API
             if objective == "LEAD_GENERATION":
-                optimize_goal, billing_event, promotion_type = ADGROUP_OPT_MAP["LEAD_GENERATION"]
-                adgroup_payload = {
+                # Получаем identity для кабинета
+                identity = await get_identity(advertiser_id, session, base_url, headers)
+                if not identity:
+                    return False, "Не найден identity для кабинета"
+
+                identity_id = identity["identity_id"]
+                identity_type = identity["identity_type"]
+                identity_bc_id = identity.get("identity_authorized_bc_id", "")
+
+                # Создаём кампанию через Smart+ API
+                sp_camp_payload = {
+                    "advertiser_id": advertiser_id,
+                    "campaign_name": data["campaign_name"],
+                    "objective_type": "LEAD_GENERATION",
+                    "budget": data["budget"],
+                }
+                sp_camp_resp = await session.post(f"{base_url}/smart_plus/campaign/create/", json=sp_camp_payload, headers=headers)
+                sp_camp_data = await sp_camp_resp.json()
+                await log_api("SMART+ CAMPAIGN CREATE", sp_camp_payload, sp_camp_data)
+                if sp_camp_data.get("code") != 0:
+                    return False, f"Ошибка Smart+ кампании: {sp_camp_data.get('message')}"
+                campaign_id = sp_camp_data["data"]["campaign_id"]
+
+                # Создаём adgroup через Smart+ API
+                sp_adgroup_payload = {
                     "advertiser_id": advertiser_id,
                     "campaign_id": campaign_id,
                     "adgroup_name": data["adgroup_name"],
-                    "placement_type": data["placement_type"],
-                    "location_ids": [str(data["geo"])],
+                    "optimization_goal": "LEADS",
+                    "promotion_type": "LEAD_GENERATION",
+                    "bid_type": "BID_TYPE_CUSTOM",
+                    "bid_price": data.get("bid_amount", 5.0),
+                    "billing_event": "OCPM",
                     "schedule_type": "SCHEDULE_START_END" if data.get("schedule_end") else "SCHEDULE_FROM_NOW",
                     "schedule_start_time": data["schedule_start"],
-                    "optimization_goal": optimize_goal,
-                    "billing_event": billing_event,
-                    "promotion_type": promotion_type,
-                    "budget_mode": data["budget_mode"],
-                    "budget": data["budget"],
-                    "bid_type": "BID_TYPE_CUSTOM",
-                    "conversion_bid_price": data.get("bid_amount", 5.0),
+                    "placement_type": "PLACEMENT_TYPE_NORMAL",
+                    "placements": ["PLACEMENT_TIKTOK"],
+                    "targeting_spec": {
+                        "location_ids": [str(data["geo"])],
+                    },
                 }
                 if data.get("schedule_end"):
-                    adgroup_payload["schedule_end_time"] = data["schedule_end"]
-                if data["placement_type"] == "PLACEMENT_TYPE_NORMAL":
-                    adgroup_payload["placements"] = data["placements"]
+                    sp_adgroup_payload["schedule_end_time"] = data["schedule_end"]
                 if data.get("pixel_id"):
-                    adgroup_payload["pixel_id"] = data["pixel_id"]
+                    sp_adgroup_payload["pixel_id"] = data["pixel_id"]
 
-                adgroup_resp = await session.post(f"{base_url}/adgroup/create/", json=adgroup_payload, headers=headers)
-                adgroup_data = await adgroup_resp.json()
-                await log_api("ADGROUP CREATE (LEAD_GEN)", adgroup_payload, adgroup_data)
-                if adgroup_data.get("code") != 0:
-                    return False, f"Ошибка группы: {adgroup_data.get('message')}"
-                adgroup_id = adgroup_data["data"]["adgroup_id"]
+                sp_adgroup_resp = await session.post(f"{base_url}/smart_plus/adgroup/create/", json=sp_adgroup_payload, headers=headers)
+                sp_adgroup_data = await sp_adgroup_resp.json()
+                await log_api("SMART+ ADGROUP CREATE", sp_adgroup_payload, sp_adgroup_data)
+                if sp_adgroup_data.get("code") != 0:
+                    return False, f"Ошибка Smart+ группы: {sp_adgroup_data.get('message')}"
+                adgroup_id = sp_adgroup_data["data"]["adgroup_id"]
 
-                deeplink = get_adgroup_deeplink(advertiser_id, campaign_id, adgroup_id)
-                return True, {
-                    "campaign_id": campaign_id,
+                # Создаём объявление через Smart+ API с tiktok_item_id
+                tiktok_item_id = data.get("tiktok_item_id")
+                if not tiktok_item_id:
+                    return False, "Не выбран TikTok пост для объявления"
+
+                sp_ad_payload = {
+                    "advertiser_id": advertiser_id,
                     "adgroup_id": adgroup_id,
-                    "deeplink": deeplink,
-                    "advertiser_name": ADVERTISERS.get(advertiser_id, advertiser_id),
+                    "ad_name": data["campaign_name"],
+                    "creative_list": [{
+                        "creative_info": {
+                            "ad_format": "SINGLE_VIDEO",
+                            "identity_type": identity_type,
+                            "identity_id": identity_id,
+                            "identity_authorized_bc_id": identity_bc_id,
+                            "tiktok_item_id": tiktok_item_id,
+                        }
+                    }],
+                    "ad_text_list": [{"ad_text": data.get("ad_text", "")}] if data.get("ad_text") else [],
+                    "landing_page_url_list": [{"landing_page_url": data["ad_url"]}] if data.get("ad_url") else [],
+                    "call_to_action_list": [{"call_to_action": "LEARN_MORE"}],
                 }
+
+                sp_ad_resp = await session.post(f"{base_url}/smart_plus/ad/create/", json=sp_ad_payload, headers=headers)
+                sp_ad_data = await sp_ad_resp.json()
+                await log_api("SMART+ AD CREATE", sp_ad_payload, sp_ad_data)
+                if sp_ad_data.get("code") != 0:
+                    return False, f"Ошибка Smart+ объявления: {sp_ad_data.get('message')}"
+
+                smart_plus_ad_id = sp_ad_data["data"]["smart_plus_ad_id"]
+                return True, f"campaign_id: {campaign_id} | ad_id: {smart_plus_ad_id}"
 
             if not video_path:
                 return False, "Видео не было загружено"
