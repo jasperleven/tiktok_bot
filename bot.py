@@ -395,10 +395,10 @@ async def cmd_accounts(message: types.Message):
     if not accounts:
         await message.answer("Нет подключённых аккаунтов. Используй /connect")
         return
-    text = "📋 *Подключённые аккаунты:*\n\n"
+    text = "📋 Подключённые аккаунты:\n\n"
     for open_id, info in accounts.items():
-        text += f"• {info['display_name']} (`{open_id}`)\n"
-    await message.answer(text, parse_mode="Markdown")
+        text += f"• {info['display_name']} ({open_id})\n"
+    await message.answer(text)
 
 
 # ─── Постинг видео ────────────────────────────────────────────────────────────
@@ -838,16 +838,15 @@ async def got_ad_url(message: types.Message, state: FSMContext):
     data = await state.get_data()
     selected = data.get("selected_advertisers", [])
     names = [ADVERTISERS.get(a, a) for a in selected]
-    await message.answer(
+    text = (
         f"Шаг 17/17 — Подтверждение\n\n"
-        f"📋 *{data['campaign_name']}*\n"
+        f"📋 {data['campaign_name']}\n"
         f"🎯 Цель: {data['objective']}\n"
         f"💰 Бюджет: {data['budget']} USD\n"
         f"📁 Кабинетов: {len(selected)}\n\n" +
-        "\n".join(f"• {n}" for n in names),
-        parse_mode="Markdown",
-        reply_markup=build_confirm_keyboard(selected)
+        "\n".join(f"• {n}" for n in names)
     )
+    await message.answer(text, reply_markup=build_confirm_keyboard(selected))
 
 
 @dp.callback_query(F.data == "create_campaign")
@@ -859,8 +858,7 @@ async def create_campaign(callback: types.CallbackQuery, state: FSMContext):
         return
 
     await callback.message.answer(
-        f"⏳ Создаю кампанию *{data['campaign_name']}* на {len(selected)} кабинетах...\nСкачиваю видео на сервер...",
-        parse_mode="Markdown"
+        f"⏳ Создаю кампанию {data['campaign_name']} на {len(selected)} кабинетах...\nСкачиваю видео на сервер..."
     )
     await state.clear()
 
@@ -888,7 +886,7 @@ async def create_campaign(callback: types.CallbackQuery, state: FSMContext):
         status = "✅" if success else "❌"
         for _ in range(5):
             try:
-                await callback.message.answer(f"{status} *{name}*\n`{msg}`", parse_mode="Markdown")
+                await callback.message.answer(f"{status} {name}\n{msg}")
                 break
             except Exception:
                 await asyncio.sleep(3)
