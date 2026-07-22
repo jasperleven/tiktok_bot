@@ -879,10 +879,19 @@ async def cmd_restart(message: types.Message, state: FSMContext):
 @dp.message(CampaignStates.video_upload, F.video | F.document)
 async def got_campaign_video(message: types.Message, state: FSMContext):
     file_id = message.document.file_id if message.document else message.video.file_id
+    chat_id = message.from_user.id
+    msg_id = message.message_id
+    await log_api("VIDEO RECEIVED", {
+        "file_id": file_id,
+        "chat_id": chat_id,
+        "message_id": msg_id,
+        "has_video": bool(message.video),
+        "has_document": bool(message.document)
+    }, {})
     await state.update_data(
         video_file_id=file_id,
-        video_message_id=message.message_id,
-        video_chat_id=message.from_user.id
+        video_message_id=msg_id,
+        video_chat_id=chat_id
     )
     await state.set_state(CampaignStates.ad_text)
     await message.answer("✅ Видео получено!\n\nШаг 15/17 — Текст объявления (до 100 символов):")
