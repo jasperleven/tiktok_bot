@@ -896,7 +896,22 @@ async def got_campaign_video(message: types.Message, state: FSMContext):
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4", dir="/tmp")
         video_path = tmp.name
         tmp.close()
-        await bot.download(file_id, destination=video_path)
+
+        # Получаем путь к файлу через локальный Bot API
+        async with aiohttp.ClientSession() as session:
+            resp = await session.get(
+                f"http://localhost:8081/bot{BOT_TOKEN}/getFile",
+                params={"file_id": file_id}
+            )
+            data = await resp.json()
+            file_path = data["result"]["file_path"]
+
+            # Скачиваем файл напрямую с локального сервера
+            async with session.get(f"http://localhost:8081/file/bot{BOT_TOKEN}/{file_path}") as r:
+                with open(video_path, "wb") as f:
+                    async for chunk in r.content.iter_chunked(1024 * 1024):
+                        f.write(chunk)
+
         await state.update_data(video_path=video_path)
         await state.set_state(CampaignStates.ad_text)
         await message.answer("✅ Видео скачано!\n\nШаг 15/17 — Текст объявления (до 100 символов):")
