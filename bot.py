@@ -947,9 +947,6 @@ async def create_campaign(callback: types.CallbackQuery, state: FSMContext):
                 message_ids=data["video_message_id"]
             )
             msg = msgs[0] if isinstance(msgs, list) else msgs
-            media = msg.document or msg.video
-            if not media:
-                raise Exception("Медиафайл не найден в сообщении")
             downloaded = await pyro.download_media(msg, file_name=video_path)
             if downloaded and downloaded != video_path:
                 shutil.move(downloaded, video_path)
