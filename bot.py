@@ -695,7 +695,7 @@ async def got_budget_mode(message: types.Message, state: FSMContext):
         await message.answer("Выбери из списка 👇")
         return
     await state.set_state(CampaignStates.budget_amount)
-    await message.answer("Шаг 6/17 — Введи сумму бюджета (USD, минимум 50):", reply_markup=ReplyKeyboardRemove())
+    await message.answer("Шаг 6/17 — Введи сумму бюджета (USD):", reply_markup=ReplyKeyboardRemove())
 
 
 @dp.message(CampaignStates.budget_amount)
