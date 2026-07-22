@@ -346,7 +346,7 @@ async def exchange_code(code, telegram_user_id):
     display_name = user_data.get("data", {}).get("user", {}).get("display_name", open_id)
     accounts[open_id] = {"access_token": access_token, "display_name": display_name}
     save_accounts(accounts)
-    await bot.send_message(telegram_user_id, f"✅ Аккаунт подключён: *{display_name}*", parse_mode="Markdown")
+    await bot.send_message(telegram_user_id, f"✅ Аккаунт подключён: {display_name}")
 
 
 # ─── Команды ─────────────────────────────────────────────────────────────────
@@ -755,7 +755,7 @@ async def got_geo(message: types.Message, state: FSMContext):
     await state.set_state(CampaignStates.schedule_start)
     await message.answer(
         "Шаг 10/17 — Дата начала\nФормат: `YYYY-MM-DD HH:MM:SS`\nНапример: `2026-07-20 10:00:00`",
-        reply_markup=ReplyKeyboardRemove(), parse_mode="Markdown"
+        reply_markup=ReplyKeyboardRemove()
     )
 
 
@@ -769,7 +769,7 @@ async def got_schedule_start(message: types.Message, state: FSMContext):
     )
     await message.answer(
         "Шаг 11/17 — Дата окончания\nФормат: `YYYY-MM-DD HH:MM:SS`\nИли кнопку:",
-        reply_markup=keyboard, parse_mode="Markdown"
+        reply_markup=keyboard
     )
 
 
@@ -879,7 +879,11 @@ async def cmd_restart(message: types.Message, state: FSMContext):
 @dp.message(CampaignStates.video_upload, F.video | F.document)
 async def got_campaign_video(message: types.Message, state: FSMContext):
     file_id = message.document.file_id if message.document else message.video.file_id
-    await state.update_data(video_file_id=file_id)
+    await state.update_data(
+        video_file_id=file_id,
+        video_message_id=message.message_id,
+        video_chat_id=message.chat.id
+    )
     await state.set_state(CampaignStates.ad_text)
     await message.answer("✅ Видео получено!\n\nШаг 15/17 — Текст объявления (до 100 символов):")
 
@@ -923,10 +927,9 @@ async def create_campaign(callback: types.CallbackQuery, state: FSMContext):
 
     await callback.message.answer("⏳ Скачиваю видео на сервер...")
 
-    # Скачиваем видео через pyrogram (поддержка файлов до 2GB)
     video_path = None
     try:
-        import tempfile
+        import tempfile, shutil
         from pyrogram import Client as PyroClient
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4", dir="/tmp")
         video_path = tmp.name
@@ -938,7 +941,14 @@ async def create_campaign(callback: types.CallbackQuery, state: FSMContext):
             api_hash=os.getenv("TELEGRAM_API_HASH", "43c1b5315b790ceedf50dd26b83882c9"),
             no_updates=True
         ) as pyro:
-            await pyro.download_media(data["video_file_id"], file_name=video_path)
+            # Получаем сообщение заново чтобы обновить file reference
+            msg = await pyro.get_messages(
+                chat_id=data["video_chat_id"],
+                message_ids=data["video_message_id"]
+            )
+            downloaded = await pyro.download_media(msg, file_name=video_path)
+            if downloaded and downloaded != video_path:
+                shutil.move(downloaded, video_path)
 
         await callback.message.answer("✅ Видео скачано. Создаю кампании...")
     except Exception as e:
@@ -964,7 +974,7 @@ async def create_campaign(callback: types.CallbackQuery, state: FSMContext):
 
 # ─── TikTok API ───────────────────────────────────────────────────────────────
 
-async def create_tiktok_campaign(advertiser_id, data, video_url):
+async def create_tiktok_campaign(advertiser_id, data, video_path):
     try:
         headers = {
             "Access-Token": MARKETING_TOKEN,
@@ -976,11 +986,21 @@ async def create_tiktok_campaign(advertiser_id, data, video_url):
         async with aiohttp.ClientSession() as session:
             identity = await get_identity(advertiser_id, session, base_url, headers)
 
-            # Загружаем видео по URL напрямую в TikTok
+            # Загружаем видео файлом на сервер TikTok
+            with open(video_path, "rb") as f:
+                video_bytes = f.read()
+            md5_hash = hashlib.md5(video_bytes).hexdigest()
+            form = aiohttp.FormData()
+            form.add_field("advertiser_id", advertiser_id)
+            form.add_field("upload_type", "UPLOAD_BY_FILE")
+            form.add_field("video_signature", md5_hash)
+            form.add_field("video_file", video_bytes,
+                filename=f"video_{advertiser_id}_{int(time.time())}.mp4",
+                content_type="video/mp4")
             upload_resp = await session.post(
                 f"{base_url}/file/video/ad/upload/",
-                json={"advertiser_id": advertiser_id, "upload_type": "UPLOAD_BY_URL", "video_url": video_url},
-                headers=headers
+                data=form,
+                headers={"Access-Token": MARKETING_TOKEN}
             )
             upload_data = await upload_resp.json()
             await log_api("VIDEO UPLOAD", {"advertiser_id": advertiser_id}, upload_data)
