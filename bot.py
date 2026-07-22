@@ -352,16 +352,62 @@ async def exchange_code(code, telegram_user_id):
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     await message.answer(
-        "👋 *TikTok Ads Manager Bot*\n\n"
-        "📢 *Реклама:*\n"
-        "/newcampaign — создать рекламную кампанию\n\n"
-        "📱 *Постинг:*\n"
+        "👋 TikTok Ads Manager Bot\n\n"
+        "📢 Реклама:\n"
+        "/newcampaign — создать рекламную кампанию\n"
+        "/deletecampaign — удалить кампанию по ID\n\n"
+        "📱 Постинг:\n"
         "/connect — подключить TikTok аккаунт\n"
         "/accounts — список аккаунтов\n"
-        "/post — опубликовать видео",
-        parse_mode="Markdown",
+        "/post — опубликовать видео\n\n"
+        "/restart — сбросить текущее состояние",
         reply_markup=ReplyKeyboardRemove()
     )
+
+
+@dp.message(Command("deletecampaign"))
+async def cmd_delete_campaign(message: types.Message):
+    args = message.text.split()
+    if len(args) < 3:
+        await message.answer(
+            "Использование:\n"
+            "/deletecampaign ADVERTISER_ID CAMPAIGN_ID\n\n"
+            "Пример:\n"
+            "/deletecampaign 7652299857702961172 1870817126333617"
+        )
+        return
+
+    advertiser_id = args[1]
+    campaign_id = args[2]
+
+    async with aiohttp.ClientSession() as session:
+        headers = {"Access-Token": MARKETING_TOKEN, "Content-Type": "application/json"}
+        base_url = "https://business-api.tiktok.com/open_api/v1.3"
+
+        # Пробуем удалить через Smart+ endpoint
+        r = await session.post(
+            f"{base_url}/smart_plus/campaign/status/update/",
+            json={"advertiser_id": advertiser_id, "campaign_ids": [campaign_id], "operation_status": "DELETE"},
+            headers=headers
+        )
+        d = await r.json()
+
+        if d.get("code") == 0:
+            await message.answer(f"✅ Кампания {campaign_id} удалена")
+            return
+
+        # Если не Smart+ — пробуем обычный endpoint
+        r = await session.post(
+            f"{base_url}/campaign/status/update/",
+            json={"advertiser_id": advertiser_id, "campaign_ids": [campaign_id], "operation_status": "DELETE"},
+            headers=headers
+        )
+        d = await r.json()
+
+        if d.get("code") == 0:
+            await message.answer(f"✅ Кампания {campaign_id} удалена")
+        else:
+            await message.answer(f"❌ Ошибка: {d.get('message')}")
 
 
 @dp.message(Command("connect"))
