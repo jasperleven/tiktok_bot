@@ -163,15 +163,17 @@ async def search_pixels(advertiser_id, query):
         async with aiohttp.ClientSession() as session:
             resp = await session.get(
                 "https://business-api.tiktok.com/open_api/v1.3/pixel/list/",
-                params={"advertiser_id": advertiser_id},
+                params={"advertiser_id": advertiser_id, "page_size": 100},
                 headers={"Access-Token": MARKETING_TOKEN}
             )
             data = await resp.json()
             if data.get("code") != 0:
                 return []
             pixels = data.get("data", {}).get("pixels", [])
+            if not query:
+                return pixels[:10]
             q = query.lower()
-            return [p for p in pixels if q in p.get("name", "").lower()]
+            return [p for p in pixels if q in p.get("name", "").lower() or q in str(p.get("pixel_id", "")).lower()]
     except Exception:
         return []
 
@@ -654,11 +656,11 @@ async def got_budget_mode(message: types.Message, state: FSMContext):
 async def got_budget_amount(message: types.Message, state: FSMContext):
     try:
         amount = float(message.text.replace(",", "."))
-        if amount < 50:
-            await message.answer("❌ Минимум 50 USD. Введи ещё раз:")
+        if amount <= 0:
+            await message.answer("❌ Введи сумму больше 0")
             return
     except ValueError:
-        await message.answer("❌ Введи число. Например: 100")
+        await message.answer("❌ Введи число. Например: 20")
         return
     await state.update_data(budget=amount)
     await state.set_state(CampaignStates.adgroup_name)
@@ -776,7 +778,7 @@ async def got_bid_amount(message: types.Message, state: FSMContext):
 async def skip_pixel(message: types.Message, state: FSMContext):
     await state.update_data(pixel_id=None)
     await state.set_state(CampaignStates.video_upload)
-    await message.answer("Шаг 14/17 — Отправь видео:")
+    await message.answer("Шаг 14/17 — Отправь видео файлом (не как медиа)\n⚠️ Если не загружается — уменьши размер\n/restart — начать заново")
 
 
 @dp.message(CampaignStates.pixel_search)
@@ -803,9 +805,9 @@ async def got_pixel_search(message: types.Message, state: FSMContext):
 async def got_pixel_select(callback: types.CallbackQuery, state: FSMContext):
     pixel_id = callback.data.replace("pixel_", "")
     await state.update_data(pixel_id=pixel_id)
-    await callback.message.answer(f"✅ Пиксель: `{pixel_id}`", parse_mode="Markdown")
+    await callback.message.answer(f"✅ Пиксель: {pixel_id}")
     await state.set_state(CampaignStates.video_upload)
-    await callback.message.answer("Шаг 14/17 — Отправь видео:")
+    await callback.message.answer("Шаг 14/17 — Отправь видео файлом (не как медиа)\n⚠️ Если не загружается — уменьши размер\n/restart — начать заново")
     await callback.answer()
 
 
@@ -813,8 +815,14 @@ async def got_pixel_select(callback: types.CallbackQuery, state: FSMContext):
 async def skip_pixel_callback(callback: types.CallbackQuery, state: FSMContext):
     await state.update_data(pixel_id=None)
     await state.set_state(CampaignStates.video_upload)
-    await callback.message.answer("Шаг 14/17 — Отправь видео:")
+    await callback.message.answer("Шаг 14/17 — Отправь видео файлом (не как медиа)\n⚠️ Если не загружается — уменьши размер\n/restart — начать заново")
     await callback.answer()
+
+
+@dp.message(Command("restart"))
+async def cmd_restart(message: types.Message, state: FSMContext):
+    await state.clear()
+    await message.answer("🔄 Состояние сброшено. Начни заново с /newcampaign", reply_markup=ReplyKeyboardRemove())
 
 
 @dp.message(CampaignStates.video_upload, F.video | F.document)
@@ -862,19 +870,16 @@ async def create_campaign(callback: types.CallbackQuery, state: FSMContext):
     )
     await state.clear()
 
-    # Скачиваем видео
+    await callback.message.answer("⏳ Скачиваю видео на сервер...")
+
+    # Скачиваем видео на сервер (поддержка больших файлов)
     video_path = None
     try:
-        file = await bot.get_file(data["video_file_id"])
-        file_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file.file_path}"
+        import tempfile
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4", dir="/tmp")
         video_path = tmp.name
         tmp.close()
-        async with aiohttp.ClientSession() as session:
-            async with session.get(file_url) as resp:
-                with open(video_path, "wb") as f:
-                    async for chunk in resp.content.iter_chunked(1024 * 1024):
-                        f.write(chunk)
+        await bot.download(data["video_file_id"], destination=video_path)
         await callback.message.answer("✅ Видео скачано. Создаю кампании...")
     except Exception as e:
         await callback.message.answer(f"❌ Ошибка скачивания видео: {e}")
@@ -899,7 +904,7 @@ async def create_campaign(callback: types.CallbackQuery, state: FSMContext):
 
 # ─── TikTok API ───────────────────────────────────────────────────────────────
 
-async def create_tiktok_campaign(advertiser_id, data, video_path):
+async def create_tiktok_campaign(advertiser_id, data, video_url):
     try:
         headers = {
             "Access-Token": MARKETING_TOKEN,
@@ -911,91 +916,81 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
         async with aiohttp.ClientSession() as session:
             identity = await get_identity(advertiser_id, session, base_url, headers)
 
-            if objective == "LEAD_GENERATION":
-                # ── Smart+ flow с загрузкой видео ────────────────────────────
-                if not identity:
-                    return False, "Не найден TikTok аккаунт для кабинета"
+            # Загружаем видео по URL напрямую в TikTok
+            upload_resp = await session.post(
+                f"{base_url}/file/video/ad/upload/",
+                json={"advertiser_id": advertiser_id, "upload_type": "UPLOAD_BY_URL", "video_url": video_url},
+                headers=headers
+            )
+            upload_data = await upload_resp.json()
+            await log_api("VIDEO UPLOAD", {"advertiser_id": advertiser_id}, upload_data)
+            if upload_data.get("code") != 0:
+                return False, f"Ошибка загрузки видео: {upload_data.get('message')}"
+            d = upload_data["data"]
+            item = d[0] if isinstance(d, list) else d
+            video_id = item["video_id"]
+            video_cover_url = item.get("video_cover_url")
 
-                # 1. Загружаем видео
-                with open(video_path, "rb") as f:
-                    video_bytes = f.read()
-                md5_hash = hashlib.md5(video_bytes).hexdigest()
-                form = aiohttp.FormData()
-                form.add_field("advertiser_id", advertiser_id)
-                form.add_field("upload_type", "UPLOAD_BY_FILE")
-                form.add_field("video_signature", md5_hash)
-                form.add_field("video_file", video_bytes,
-                    filename=f"video_{advertiser_id}_{int(time.time())}.mp4",
-                    content_type="video/mp4")
-                upload_resp = await session.post(
-                    f"{base_url}/file/video/ad/upload/",
-                    data=form,
-                    headers={"Access-Token": MARKETING_TOKEN}
-                )
-                upload_data = await upload_resp.json()
-                await log_api("VIDEO UPLOAD", {"advertiser_id": advertiser_id}, upload_data)
-                if upload_data.get("code") != 0:
-                    return False, f"Ошибка загрузки видео: {upload_data.get('message')}"
-                d = upload_data["data"]
-                item = d[0] if isinstance(d, list) else d
-                video_id = item["video_id"]
-                video_cover_url = item.get("video_cover_url")
-
-                # Если обложки нет — ждём и ищем
-                if not video_cover_url:
-                    await asyncio.sleep(15)
-                    for _ in range(5):
-                        search_resp = await session.get(
-                            f"{base_url}/file/video/ad/search/",
-                            params={"advertiser_id": advertiser_id, "page_size": 20},
-                            headers=headers
-                        )
-                        search_data = await search_resp.json()
-                        for v in search_data.get("data", {}).get("list", []):
-                            if v.get("video_id") == video_id:
-                                video_cover_url = v.get("video_cover_url")
-                                break
-                        if video_cover_url:
-                            break
-                        await asyncio.sleep(5)
-
-                # 2. Загружаем обложку
-                web_uri = None
-                if video_cover_url:
-                    cover_resp = await session.post(
-                        f"{base_url}/file/image/ad/upload/",
-                        json={"advertiser_id": advertiser_id, "upload_type": "UPLOAD_BY_URL", "image_url": video_cover_url},
-                        headers=headers
-                    )
-                    cover_data = await cover_resp.json()
-                    if cover_data.get("code") == 0:
-                        web_uri = cover_data["data"]["image_id"]
-
-                if not web_uri:
-                    # Берём обложку от любого другого видео в библиотеке
+            # Если обложки нет — ждём и ищем
+            if not video_cover_url:
+                await asyncio.sleep(15)
+                for _ in range(5):
                     search_resp = await session.get(
                         f"{base_url}/file/video/ad/search/",
-                        params={"advertiser_id": advertiser_id, "page_size": 5},
+                        params={"advertiser_id": advertiser_id, "page_size": 20},
                         headers=headers
                     )
                     search_data = await search_resp.json()
                     for v in search_data.get("data", {}).get("list", []):
-                        fallback_cover = v.get("video_cover_url")
-                        if fallback_cover:
-                            cover_resp = await session.post(
-                                f"{base_url}/file/image/ad/upload/",
-                                json={"advertiser_id": advertiser_id, "upload_type": "UPLOAD_BY_URL", "image_url": fallback_cover},
-                                headers=headers
-                            )
-                            cover_data = await cover_resp.json()
-                            if cover_data.get("code") == 0:
-                                web_uri = cover_data["data"]["image_id"]
-                                break
+                        if v.get("video_id") == video_id:
+                            video_cover_url = v.get("video_cover_url")
+                            break
+                    if video_cover_url:
+                        break
+                    await asyncio.sleep(5)
 
-                if not web_uri:
-                    return False, "Не удалось загрузить обложку видео"
+            # Загружаем обложку
+            web_uri = None
+            if video_cover_url:
+                cover_resp = await session.post(
+                    f"{base_url}/file/image/ad/upload/",
+                    json={"advertiser_id": advertiser_id, "upload_type": "UPLOAD_BY_URL", "image_url": video_cover_url},
+                    headers=headers
+                )
+                cover_data = await cover_resp.json()
+                if cover_data.get("code") == 0:
+                    web_uri = cover_data["data"]["image_id"]
 
-                # 3. Создаём кампанию
+            # Если обложки нет — берём из любого видео в библиотеке
+            if not web_uri:
+                search_resp = await session.get(
+                    f"{base_url}/file/video/ad/search/",
+                    params={"advertiser_id": advertiser_id, "page_size": 5},
+                    headers=headers
+                )
+                search_data = await search_resp.json()
+                for v in search_data.get("data", {}).get("list", []):
+                    fallback_cover = v.get("video_cover_url")
+                    if fallback_cover:
+                        cover_resp = await session.post(
+                            f"{base_url}/file/image/ad/upload/",
+                            json={"advertiser_id": advertiser_id, "upload_type": "UPLOAD_BY_URL", "image_url": fallback_cover},
+                            headers=headers
+                        )
+                        cover_data = await cover_resp.json()
+                        if cover_data.get("code") == 0:
+                            web_uri = cover_data["data"]["image_id"]
+                            break
+
+            if not web_uri:
+                return False, "Не удалось загрузить обложку видео"
+
+            if objective == "LEAD_GENERATION":
+                # ── Smart+ flow ───────────────────────────────────────────────
+                if not identity:
+                    return False, "Не найден TikTok аккаунт для кабинета"
+
+                # Кампания
                 sp_camp_payload = {
                     "advertiser_id": advertiser_id,
                     "campaign_name": data["campaign_name"],
@@ -1010,7 +1005,7 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                     return False, f"Ошибка кампании: {sp_camp_data.get('message')}"
                 campaign_id = sp_camp_data["data"]["campaign_id"]
 
-                # 4. Создаём adgroup
+                # Adgroup
                 sp_adgroup_payload = {
                     "advertiser_id": advertiser_id,
                     "campaign_id": campaign_id,
@@ -1040,7 +1035,7 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                     return False, f"Ошибка группы: {sp_adgroup_data.get('message')}"
                 adgroup_id = sp_adgroup_data["data"]["adgroup_id"]
 
-                # 5. Создаём объявление с video_id
+                # Объявление
                 sp_ad_payload = {
                     "advertiser_id": advertiser_id,
                     "adgroup_id": adgroup_id,
@@ -1069,19 +1064,16 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
 
             else:
                 # ── Обычный flow для остальных целей ─────────────────────────
-                # 1. Кампания
                 budget_optimize_on = data.get("budget_optimize_on", False)
                 camp_payload = {
                     "advertiser_id": advertiser_id,
                     "campaign_name": data["campaign_name"],
                     "objective_type": objective,
-                    "budget_mode": data["budget_mode"] if not budget_optimize_on else "BUDGET_MODE_INFINITE",
-                    "budget": data["budget"] if not budget_optimize_on else 0,
+                    "budget_mode": data["budget_mode"],
+                    "budget": data["budget"],
                 }
                 if budget_optimize_on:
                     camp_payload["budget_optimize_on"] = True
-                    camp_payload["budget_mode"] = data["budget_mode"]
-                    camp_payload["budget"] = data["budget"]
 
                 camp_resp = await session.post(f"{base_url}/campaign/create/", json=camp_payload, headers=headers)
                 camp_data = await camp_resp.json()
@@ -1090,30 +1082,7 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                     return False, f"Ошибка кампании: {camp_data.get('message')}"
                 campaign_id = camp_data["data"]["campaign_id"]
 
-                # 2. Загружаем видео
-                with open(video_path, "rb") as f:
-                    video_bytes = f.read()
-                md5_hash = hashlib.md5(video_bytes).hexdigest()
-                form = aiohttp.FormData()
-                form.add_field("advertiser_id", advertiser_id)
-                form.add_field("upload_type", "UPLOAD_BY_FILE")
-                form.add_field("video_signature", md5_hash)
-                form.add_field("video_file", video_bytes,
-                    filename=f"video_{advertiser_id}_{int(time.time())}.mp4",
-                    content_type="video/mp4")
-                upload_resp = await session.post(
-                    f"{base_url}/file/video/ad/upload/",
-                    data=form,
-                    headers={"Access-Token": MARKETING_TOKEN}
-                )
-                upload_data = await upload_resp.json()
-                await log_api("VIDEO UPLOAD", {"advertiser_id": advertiser_id}, upload_data)
-                if upload_data.get("code") != 0:
-                    return False, f"Ошибка загрузки видео: {upload_data.get('message')}"
-                d = upload_data["data"]
-                video_id = d[0]["video_id"] if isinstance(d, list) else d["video_id"]
-
-                # 3. Adgroup
+                # Adgroup
                 optimize_goal, billing_event, promotion_type = ADGROUP_OPT_MAP.get(objective, ("CLICK", "CPC", "WEBSITE"))
                 adgroup_payload = {
                     "advertiser_id": advertiser_id,
@@ -1147,7 +1116,7 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                     return False, f"Ошибка группы: {adgroup_data.get('message')}"
                 adgroup_id = adgroup_data["data"]["adgroup_id"]
 
-                # 4. Identity для объявления
+                # Объявление
                 creative = {
                     "ad_name": data["campaign_name"],
                     "ad_text": data.get("ad_text", ""),
@@ -1168,7 +1137,7 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                     headers=headers
                 )
                 ad_data = await ad_resp.json()
-                await log_api("AD CREATE", {"advertiser_id": advertiser_id, "adgroup_id": adgroup_id}, ad_data)
+                await log_api("AD CREATE", {}, ad_data)
                 if ad_data.get("code") != 0:
                     return False, f"Ошибка объявления: {ad_data.get('message')}"
 
