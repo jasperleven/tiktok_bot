@@ -163,17 +163,19 @@ async def search_pixels(advertiser_id, query):
         async with aiohttp.ClientSession() as session:
             resp = await session.get(
                 "https://business-api.tiktok.com/open_api/v1.3/pixel/list/",
-                params={"advertiser_id": advertiser_id, "page_size": 100},
+                params={"advertiser_id": advertiser_id, "page_size": 20},
                 headers={"Access-Token": MARKETING_TOKEN}
             )
             data = await resp.json()
             if data.get("code") != 0:
                 return []
             pixels = data.get("data", {}).get("pixels", [])
-            if not query:
-                return pixels[:10]
+            if not query or query == ".":
+                return pixels[:20]
             q = query.lower()
-            return [p for p in pixels if q in p.get("name", "").lower() or q in str(p.get("pixel_id", "")).lower()]
+            return [p for p in pixels if
+                q in (p.get("name") or "").lower() or
+                q in str(p.get("pixel_id", "")).lower()]
     except Exception:
         return []
 
@@ -840,7 +842,10 @@ async def got_pixel_search(message: types.Message, state: FSMContext):
         return
     await state.update_data(found_pixels=pixels)
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"{p['name']}", callback_data=f"pixel_{p['pixel_id']}")]
+        [InlineKeyboardButton(
+            text=p.get("name") or f"Pixel {p['pixel_id']}",
+            callback_data=f"pixel_{p['pixel_id']}"
+        )]
         for p in pixels[:10]
     ] + [[InlineKeyboardButton(text="⏭ Пропустить", callback_data="pixel_skip")]])
     await message.answer("Выбери пиксель:", reply_markup=keyboard)
@@ -918,14 +923,23 @@ async def create_campaign(callback: types.CallbackQuery, state: FSMContext):
 
     await callback.message.answer("⏳ Скачиваю видео на сервер...")
 
-    # Скачиваем видео на сервер (поддержка больших файлов)
+    # Скачиваем видео через pyrogram (поддержка файлов до 2GB)
     video_path = None
     try:
         import tempfile
+        from pyrogram import Client as PyroClient
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4", dir="/tmp")
         video_path = tmp.name
         tmp.close()
-        await bot.download(data["video_file_id"], destination=video_path)
+
+        async with PyroClient(
+            "tg_session",
+            api_id=int(os.getenv("TELEGRAM_API_ID", 33411515)),
+            api_hash=os.getenv("TELEGRAM_API_HASH", "43c1b5315b790ceedf50dd26b83882c9"),
+            no_updates=True
+        ) as pyro:
+            await pyro.download_media(data["video_file_id"], file_name=video_path)
+
         await callback.message.answer("✅ Видео скачано. Создаю кампании...")
     except Exception as e:
         await callback.message.answer(f"❌ Ошибка скачивания видео: {e}")
