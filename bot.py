@@ -9,6 +9,9 @@ import time
 from urllib.parse import urlparse, parse_qs
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from aiogram import Bot, Dispatcher, types, F
+from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.client.telegram import TelegramAPIServer
+from aiogram.client.default import DefaultBotProperties
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -114,7 +117,13 @@ def save_accounts(accs):
     with open(ACCOUNTS_FILE, "w") as f:
         json.dump(accs, f)
 
-bot = Bot(token=BOT_TOKEN)
+from aiogram.client.telegram import TelegramAPIServer
+
+bot = Bot(
+    token=BOT_TOKEN,
+    default=DefaultBotProperties(),
+    session=AiohttpSession(api=TelegramAPIServer.from_base("http://localhost:8081"))
+)
 dp = Dispatcher(storage=MemoryStorage())
 accounts = load_accounts()
 
@@ -878,23 +887,21 @@ async def cmd_restart(message: types.Message, state: FSMContext):
 
 @dp.message(CampaignStates.video_upload, F.video | F.document)
 async def got_campaign_video(message: types.Message, state: FSMContext):
+    import tempfile
     file_id = message.document.file_id if message.document else message.video.file_id
-    chat_id = message.from_user.id
-    msg_id = message.message_id
-    await log_api("VIDEO RECEIVED", {
-        "file_id": file_id,
-        "chat_id": chat_id,
-        "message_id": msg_id,
-        "has_video": bool(message.video),
-        "has_document": bool(message.document)
-    }, {})
-    await state.update_data(
-        video_file_id=file_id,
-        video_message_id=msg_id,
-        video_chat_id=chat_id
-    )
-    await state.set_state(CampaignStates.ad_text)
-    await message.answer("✅ Видео получено!\n\nШаг 15/17 — Текст объявления (до 100 символов):")
+
+    await message.answer("⏳ Скачиваю видео на сервер...")
+
+    try:
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4", dir="/tmp")
+        video_path = tmp.name
+        tmp.close()
+        await bot.download(file_id, destination=video_path)
+        await state.update_data(video_path=video_path)
+        await state.set_state(CampaignStates.ad_text)
+        await message.answer("✅ Видео скачано!\n\nШаг 15/17 — Текст объявления (до 100 символов):")
+    except Exception as e:
+        await message.answer(f"❌ Ошибка скачивания видео: {e}\n/restart — начать заново")
 
 
 @dp.message(CampaignStates.ad_text)
@@ -934,35 +941,11 @@ async def create_campaign(callback: types.CallbackQuery, state: FSMContext):
     )
     await state.clear()
 
-    await callback.message.answer("⏳ Скачиваю видео на сервер...")
+    await callback.message.answer("⏳ Создаю кампании...")
 
-    video_path = None
-    try:
-        import tempfile, shutil, aiohttp as _aiohttp
-        from pyrogram import Client as PyroClient
-
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4", dir="/tmp")
-        video_path = tmp.name
-        tmp.close()
-
-        async with PyroClient(
-            "tg_session",
-            api_id=int(os.getenv("TELEGRAM_API_ID", 33411515)),
-            api_hash=os.getenv("TELEGRAM_API_HASH", "43c1b5315b790ceedf50dd26b83882c9"),
-            no_updates=True
-        ) as pyro:
-            msgs = await pyro.get_messages(
-                chat_id=data["video_chat_id"],
-                message_ids=data["video_message_id"]
-            )
-            msg = msgs[0] if isinstance(msgs, list) else msgs
-            downloaded = await pyro.download_media(msg, file_name=video_path)
-            if downloaded and downloaded != video_path:
-                shutil.move(downloaded, video_path)
-
-        await callback.message.answer("✅ Видео скачано. Создаю кампании...")
-    except Exception as e:
-        await callback.message.answer(f"❌ Ошибка скачивания видео: {e}")
+    video_path = data.get("video_path")
+    if not video_path or not os.path.exists(video_path):
+        await callback.message.answer("❌ Видео не найдено. Начни заново /newcampaign")
         return
 
     for adv_id in selected:
