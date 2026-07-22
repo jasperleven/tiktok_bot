@@ -882,7 +882,7 @@ async def got_campaign_video(message: types.Message, state: FSMContext):
     await state.update_data(
         video_file_id=file_id,
         video_message_id=message.message_id,
-        video_chat_id=message.chat.id
+        video_chat_id=message.from_user.id
     )
     await state.set_state(CampaignStates.ad_text)
     await message.answer("✅ Видео получено!\n\nШаг 15/17 — Текст объявления (до 100 символов):")
@@ -929,8 +929,9 @@ async def create_campaign(callback: types.CallbackQuery, state: FSMContext):
 
     video_path = None
     try:
-        import tempfile, shutil
+        import tempfile, shutil, aiohttp as _aiohttp
         from pyrogram import Client as PyroClient
+
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4", dir="/tmp")
         video_path = tmp.name
         tmp.close()
@@ -941,11 +942,14 @@ async def create_campaign(callback: types.CallbackQuery, state: FSMContext):
             api_hash=os.getenv("TELEGRAM_API_HASH", "43c1b5315b790ceedf50dd26b83882c9"),
             no_updates=True
         ) as pyro:
-            # Получаем сообщение заново чтобы обновить file reference
-            msg = await pyro.get_messages(
+            msgs = await pyro.get_messages(
                 chat_id=data["video_chat_id"],
                 message_ids=data["video_message_id"]
             )
+            msg = msgs[0] if isinstance(msgs, list) else msgs
+            media = msg.document or msg.video
+            if not media:
+                raise Exception("Медиафайл не найден в сообщении")
             downloaded = await pyro.download_media(msg, file_name=video_path)
             if downloaded and downloaded != video_path:
                 shutil.move(downloaded, video_path)
