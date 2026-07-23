@@ -89,7 +89,6 @@ COUNTRIES = {
     "🇧🇾 Беларусь": 630336,
     "🇷🇺 Россия": 2017370,
     "🇰🇿 Казахстан": 1522867,
-    "🇺🇦 Украина": 690791,
     "🇺🇿 Узбекистан": 1512440,
     "🇩🇪 Германия": 2921044,
     "🇺🇸 США": 6252001,
@@ -1335,7 +1334,7 @@ async def show_step(state, msg_or_cb, step_name):
     elif step_name == "video_upload":
         await state.set_state(CampaignStates.video_upload)
         kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="◀️ Назад")]], resize_keyboard=True)
-        await m.answer("Шаг 14/17 — Отправь видео файлом (не как медиа)\n/restart — начать заново", reply_markup=kb)
+        await m.answer("Шаг 14/17 — Отправь видео файлом (не как медиа)", reply_markup=kb)
 
     elif step_name == "ad_text":
         await state.set_state(CampaignStates.ad_text)
