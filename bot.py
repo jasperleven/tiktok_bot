@@ -1396,6 +1396,13 @@ loop = None
 async def main():
     global loop
     loop = asyncio.get_event_loop()
+    # Чистим старые временные видео при старте
+    import glob
+    for f in glob.glob("/tmp/*.mp4"):
+        try:
+            os.remove(f)
+        except Exception:
+            pass
     threading.Thread(target=run_web, daemon=True).start()
     await dp.start_polling(bot)
 
