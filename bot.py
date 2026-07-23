@@ -179,12 +179,17 @@ async def search_pixels(advertiser_id, query):
             if data.get("code") != 0:
                 return []
             pixels = data.get("data", {}).get("pixels", [])
+            # Нормализуем — берём pixel_name из ответа
+            result = []
+            for p in pixels:
+                result.append({
+                    "pixel_id": str(p.get("pixel_id", "")),
+                    "name": p.get("pixel_name") or p.get("name") or ""
+                })
             if not query or query == ".":
-                return pixels[:20]
+                return result[:20]
             q = query.lower()
-            return [p for p in pixels if
-                q in (p.get("name") or "").lower() or
-                q in str(p.get("pixel_id", "")).lower()]
+            return [p for p in result if q in p["name"].lower() or q in p["pixel_id"].lower()]
     except Exception:
         return []
 
@@ -198,6 +203,11 @@ async def get_identity(advertiser_id, session, base_url, headers):
         )
         data = await resp.json()
         ident_list = data.get("data", {}).get("identity_list", [])
+        # Предпочитаем BC_AUTH_TT NORMAL
+        for i in ident_list:
+            if i.get("identity_type") == "BC_AUTH_TT" and not i.get("ads_only_mode"):
+                return i
+        # Если нет NORMAL — берём любой BC_AUTH_TT
         for i in ident_list:
             if i.get("identity_type") == "BC_AUTH_TT":
                 return i
@@ -648,7 +658,7 @@ async def advertisers_done(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@dp.message(CampaignStates.campaign_name)
+@dp.message(CampaignStates.campaign_name, F.text != "◀️ Назад")
 async def got_campaign_name(message: types.Message, state: FSMContext):
     await state.update_data(campaign_name=message.text)
     await state.set_state(CampaignStates.campaign_objective)
@@ -659,7 +669,7 @@ async def got_campaign_name(message: types.Message, state: FSMContext):
     await message.answer("Шаг 3/17 — Выбери цель рекламы:", reply_markup=keyboard)
 
 
-@dp.message(CampaignStates.campaign_objective)
+@dp.message(CampaignStates.campaign_objective, F.text != "◀️ Назад")
 async def got_objective(message: types.Message, state: FSMContext):
     if message.text not in OBJECTIVES:
         await message.answer("Выбери цель из списка 👇")
@@ -677,7 +687,7 @@ async def got_objective(message: types.Message, state: FSMContext):
     await message.answer("Шаг 4/17 — Где устанавливать бюджет?", reply_markup=keyboard)
 
 
-@dp.message(CampaignStates.budget_level)
+@dp.message(CampaignStates.budget_level, F.text != "◀️ Назад")
 async def got_budget_level(message: types.Message, state: FSMContext):
     if message.text == "📊 На кампанию (CBO)":
         await state.update_data(budget_optimize_on=True)
@@ -698,7 +708,7 @@ async def got_budget_level(message: types.Message, state: FSMContext):
     await message.answer("Шаг 5/17 — Тип бюджета:", reply_markup=keyboard)
 
 
-@dp.message(CampaignStates.budget_mode)
+@dp.message(CampaignStates.budget_mode, F.text != "◀️ Назад")
 async def got_budget_mode(message: types.Message, state: FSMContext):
     if message.text == "📅 Дневной":
         await state.update_data(budget_mode="BUDGET_MODE_DAY")
@@ -711,7 +721,7 @@ async def got_budget_mode(message: types.Message, state: FSMContext):
     await message.answer("Шаг 6/17 — Введи сумму бюджета (USD):", reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="◀️ Назад")]], resize_keyboard=True))
 
 
-@dp.message(CampaignStates.budget_amount)
+@dp.message(CampaignStates.budget_amount, F.text != "◀️ Назад")
 async def got_budget_amount(message: types.Message, state: FSMContext):
     try:
         amount = float(message.text.replace(",", "."))
@@ -726,7 +736,7 @@ async def got_budget_amount(message: types.Message, state: FSMContext):
     await message.answer("Шаг 7/17 — Введи название группы объявлений:", reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="◀️ Назад")]], resize_keyboard=True))
 
 
-@dp.message(CampaignStates.adgroup_name)
+@dp.message(CampaignStates.adgroup_name, F.text != "◀️ Назад")
 async def got_adgroup_name(message: types.Message, state: FSMContext):
     await state.update_data(adgroup_name=message.text)
     await state.set_state(CampaignStates.placement)
@@ -741,7 +751,7 @@ async def got_adgroup_name(message: types.Message, state: FSMContext):
     await message.answer("Шаг 8/17 — Плейсменты:", reply_markup=keyboard)
 
 
-@dp.message(CampaignStates.placement)
+@dp.message(CampaignStates.placement, F.text != "◀️ Назад")
 async def got_placement(message: types.Message, state: FSMContext):
     if message.text == "🎵 Только TikTok":
         await state.update_data(placement_type="PLACEMENT_TYPE_NORMAL", placements=["PLACEMENT_TIKTOK"])
@@ -758,7 +768,7 @@ async def got_placement(message: types.Message, state: FSMContext):
     await message.answer("Шаг 9/17 — Гео:", reply_markup=keyboard)
 
 
-@dp.message(CampaignStates.geo)
+@dp.message(CampaignStates.geo, F.text != "◀️ Назад")
 async def got_geo(message: types.Message, state: FSMContext):
     if message.text not in COUNTRIES:
         await message.answer("Выбери страну из списка 👇")
@@ -771,7 +781,7 @@ async def got_geo(message: types.Message, state: FSMContext):
     )
 
 
-@dp.message(CampaignStates.schedule_start)
+@dp.message(CampaignStates.schedule_start, F.text != "◀️ Назад")
 async def got_schedule_start(message: types.Message, state: FSMContext):
     await state.update_data(schedule_start=message.text)
     await state.set_state(CampaignStates.schedule_end)
@@ -785,7 +795,7 @@ async def got_schedule_start(message: types.Message, state: FSMContext):
     )
 
 
-@dp.message(CampaignStates.schedule_end)
+@dp.message(CampaignStates.schedule_end, F.text != "◀️ Назад")
 async def got_schedule_end(message: types.Message, state: FSMContext):
     end = None if message.text == "♾ Без даты окончания" else message.text
     await state.update_data(schedule_end=end)
@@ -800,7 +810,7 @@ async def got_schedule_end(message: types.Message, state: FSMContext):
     await message.answer("Шаг 12/17 — Ставка:", reply_markup=keyboard)
 
 
-@dp.message(CampaignStates.bid_type)
+@dp.message(CampaignStates.bid_type, F.text != "◀️ Назад")
 async def got_bid_type(message: types.Message, state: FSMContext):
     if message.text == "🤖 Автоставка":
         await state.update_data(bid_type="BID_TYPE_NO_BID", bid_amount=None)
@@ -817,7 +827,7 @@ async def got_bid_type(message: types.Message, state: FSMContext):
         await message.answer("Выбери из списка 👇")
 
 
-@dp.message(CampaignStates.bid_amount)
+@dp.message(CampaignStates.bid_amount, F.text != "◀️ Назад")
 async def got_bid_amount(message: types.Message, state: FSMContext):
     try:
         bid = float(message.text.replace(",", "."))
@@ -841,7 +851,7 @@ async def skip_pixel(message: types.Message, state: FSMContext):
     await message.answer("Шаг 14/17 — Отправь видео файлом (не как медиа)\n⚠️ Если не загружается — уменьши размер\n/restart — начать заново")
 
 
-@dp.message(CampaignStates.pixel_search)
+@dp.message(CampaignStates.pixel_search, F.text != "◀️ Назад")
 async def got_pixel_search(message: types.Message, state: FSMContext):
     query = message.text.strip()
     await message.answer(f"🔍 Ищу пиксели с '{query}'...")
@@ -930,14 +940,14 @@ async def got_campaign_video(message: types.Message, state: FSMContext):
         await message.answer(f"❌ Ошибка скачивания видео: {e}\n/restart — начать заново")
 
 
-@dp.message(CampaignStates.ad_text)
+@dp.message(CampaignStates.ad_text, F.text != "◀️ Назад")
 async def got_ad_text(message: types.Message, state: FSMContext):
     await state.update_data(ad_text=message.text[:100])
     await state.set_state(CampaignStates.ad_url)
     await message.answer("Шаг 16/17 — Ссылка на лендинг (URL):")
 
 
-@dp.message(CampaignStates.ad_url)
+@dp.message(CampaignStates.ad_url, F.text != "◀️ Назад")
 async def got_ad_url(message: types.Message, state: FSMContext):
     await state.update_data(ad_url=message.text)
     data = await state.get_data()
@@ -1113,13 +1123,7 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                     return False, f"Ошибка группы: {sp_adgroup_data.get('message')}"
                 adgroup_id = sp_adgroup_data["data"]["adgroup_id"]
 
-                # Объявление
-                sp_ad_payload = {
-                    "advertiser_id": advertiser_id,
-                    "adgroup_id": adgroup_id,
-                    "ad_name": data["campaign_name"],
-                    "creative_list": [{
-                        "creative_info": {
+                creative_info = {
                             "ad_format": "SINGLE_VIDEO",
                             "video_info": {"video_id": video_id},
                             "image_info": [{"web_uri": web_uri}],
@@ -1127,7 +1131,15 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                             "identity_id": identity["identity_id"],
                             "identity_authorized_bc_id": identity.get("identity_authorized_bc_id", ""),
                         }
-                    }],
+                if identity.get("ads_only_mode"):
+                    creative_info["dark_post_status"] = "ON"
+
+                # Объявление
+                sp_ad_payload = {
+                    "advertiser_id": advertiser_id,
+                    "adgroup_id": adgroup_id,
+                    "ad_name": data["campaign_name"],
+                    "creative_list": [{"creative_info": creative_info}],
                     "ad_text_list": [{"ad_text": data.get("ad_text", "")}],
                     "landing_page_url_list": [{"landing_page_url": data.get("ad_url", "")}] if data.get("ad_url") else [],
                     "call_to_action_list": [{"call_to_action": "LEARN_MORE"}],
