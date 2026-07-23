@@ -1075,7 +1075,8 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                             web_uri = cover_data["data"]["image_id"]
                             break
 
-            if not web_uri:
+            # Для обычных целей обложка обязательна, для Smart+ - нет
+            if not web_uri and objective != "LEAD_GENERATION":
                 return False, "Не удалось загрузить обложку видео"
 
             if objective == "LEAD_GENERATION":
