@@ -887,7 +887,7 @@ async def cmd_restart(message: types.Message, state: FSMContext):
 
 @dp.message(CampaignStates.video_upload, F.video | F.document)
 async def got_campaign_video(message: types.Message, state: FSMContext):
-    import tempfile
+    import tempfile, shutil
     file_id = message.document.file_id if message.document else message.video.file_id
 
     await message.answer("⏳ Скачиваю видео на сервер...")
@@ -897,24 +897,28 @@ async def got_campaign_video(message: types.Message, state: FSMContext):
         video_path = tmp.name
         tmp.close()
 
-        # Получаем путь к файлу через локальный Bot API
         async with aiohttp.ClientSession() as session:
+            # Получаем путь к файлу через локальный Bot API
             resp = await session.get(
                 f"http://localhost:8081/bot{BOT_TOKEN}/getFile",
                 params={"file_id": file_id}
             )
             data = await resp.json()
+            if not data.get("ok"):
+                raise Exception(f"getFile error: {data.get('description')}")
             file_path = data["result"]["file_path"]
 
-            # Скачиваем файл напрямую с локального сервера
-            async with session.get(f"http://localhost:8081/file/bot{BOT_TOKEN}/{file_path}") as r:
-                with open(video_path, "wb") as f:
-                    async for chunk in r.content.iter_chunked(1024 * 1024):
-                        f.write(chunk)
+        # В local mode файл хранится на диске — копируем напрямую
+        local_file = f"/tmp/telegram-bot-api/{file_path}"
+        if os.path.exists(local_file):
+            shutil.copy2(local_file, video_path)
+        else:
+            raise Exception(f"Файл не найден: {local_file}")
 
         await state.update_data(video_path=video_path)
         await state.set_state(CampaignStates.ad_text)
-        await message.answer("✅ Видео скачано!\n\nШаг 15/17 — Текст объявления (до 100 символов):")
+        size = os.path.getsize(video_path)
+        await message.answer(f"✅ Видео скачано ({size//1024//1024} MB)!\n\nШаг 15/17 — Текст объявления (до 100 символов):")
     except Exception as e:
         await message.answer(f"❌ Ошибка скачивания видео: {e}\n/restart — начать заново")
 
