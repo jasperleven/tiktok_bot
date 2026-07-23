@@ -1024,25 +1024,26 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
             video_id = item["video_id"]
             video_cover_url = item.get("video_cover_url")
 
-            # Ждём обложку нашего видео (TikTok обрабатывает асинхронно)
+            # Если обложки нет — ищем через filtering
             if not video_cover_url:
-                await asyncio.sleep(20)
-                for _ in range(10):
+                await asyncio.sleep(10)
+                for _ in range(6):
                     search_resp = await session.get(
                         f"{base_url}/file/video/ad/search/",
-                        params={"advertiser_id": advertiser_id, "page_size": 20},
+                        params={
+                            "advertiser_id": advertiser_id,
+                            "filtering": f'{{"video_ids":["{video_id}"]}}'
+                        },
                         headers=headers
                     )
                     search_data = await search_resp.json()
-                    for v in search_data.get("data", {}).get("list", []):
-                        if v.get("video_id") == video_id:
-                            video_cover_url = v.get("video_cover_url")
-                            break
-                    if video_cover_url:
+                    videos = search_data.get("data", {}).get("list", [])
+                    if videos and videos[0].get("video_cover_url"):
+                        video_cover_url = videos[0]["video_cover_url"]
                         break
                     await asyncio.sleep(10)
 
-            # Загружаем обложку нашего видео
+            # Загружаем обложку
             web_uri = None
             if video_cover_url:
                 cover_resp = await session.post(
@@ -1055,7 +1056,7 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                     web_uri = cover_data["data"]["image_id"]
 
             if not web_uri:
-                return False, "Не удалось загрузить обложку видео — попробуй через минуту"
+                return False, "Не удалось загрузить обложку видео"
 
             if objective == "LEAD_GENERATION":
                 # ── Smart+ flow ───────────────────────────────────────────────
