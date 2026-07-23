@@ -1024,10 +1024,10 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
             video_id = item["video_id"]
             video_cover_url = item.get("video_cover_url")
 
-            # Если обложки нет — ждём и ищем
+            # Ждём обложку нашего видео (TikTok обрабатывает асинхронно)
             if not video_cover_url:
-                await asyncio.sleep(15)
-                for _ in range(5):
+                await asyncio.sleep(20)
+                for _ in range(10):
                     search_resp = await session.get(
                         f"{base_url}/file/video/ad/search/",
                         params={"advertiser_id": advertiser_id, "page_size": 20},
@@ -1040,9 +1040,9 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                             break
                     if video_cover_url:
                         break
-                    await asyncio.sleep(5)
+                    await asyncio.sleep(10)
 
-            # Загружаем обложку
+            # Загружаем обложку нашего видео
             web_uri = None
             if video_cover_url:
                 cover_resp = await session.post(
@@ -1054,30 +1054,8 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                 if cover_data.get("code") == 0:
                     web_uri = cover_data["data"]["image_id"]
 
-            # Если обложки нет — берём из любого видео в библиотеке
             if not web_uri:
-                search_resp = await session.get(
-                    f"{base_url}/file/video/ad/search/",
-                    params={"advertiser_id": advertiser_id, "page_size": 5},
-                    headers=headers
-                )
-                search_data = await search_resp.json()
-                for v in search_data.get("data", {}).get("list", []):
-                    fallback_cover = v.get("video_cover_url")
-                    if fallback_cover:
-                        cover_resp = await session.post(
-                            f"{base_url}/file/image/ad/upload/",
-                            json={"advertiser_id": advertiser_id, "upload_type": "UPLOAD_BY_URL", "image_url": fallback_cover},
-                            headers=headers
-                        )
-                        cover_data = await cover_resp.json()
-                        if cover_data.get("code") == 0:
-                            web_uri = cover_data["data"]["image_id"]
-                            break
-
-            # Для обычных целей обложка обязательна, для Smart+ - нет
-            if not web_uri and objective != "LEAD_GENERATION":
-                return False, "Не удалось загрузить обложку видео"
+                return False, "Не удалось загрузить обложку видео — попробуй через минуту"
 
             if objective == "LEAD_GENERATION":
                 # ── Smart+ flow ───────────────────────────────────────────────
@@ -1138,6 +1116,7 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                         "creative_info": {
                             "ad_format": "SINGLE_VIDEO",
                             "video_info": {"video_id": video_id},
+                            "image_info": [{"web_uri": web_uri}],
                             "identity_type": identity["identity_type"],
                             "identity_id": identity["identity_id"],
                             "identity_authorized_bc_id": identity.get("identity_authorized_bc_id", ""),
