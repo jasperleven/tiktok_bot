@@ -908,8 +908,9 @@ async def got_campaign_video(message: types.Message, state: FSMContext):
                 raise Exception(f"getFile error: {data.get('description')}")
             file_path = data["result"]["file_path"]
 
-        # В local mode файл хранится на диске — копируем напрямую
-        local_file = f"/tmp/telegram-bot-api/{file_path}"
+        # В local mode file_path содержит абсолютный путь внутри контейнера
+        # Маппим /var/lib/telegram-bot-api -> /tmp/telegram-bot-api
+        local_file = file_path.replace("/var/lib/telegram-bot-api", "/tmp/telegram-bot-api")
         if os.path.exists(local_file):
             shutil.copy2(local_file, video_path)
         else:
