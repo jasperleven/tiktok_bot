@@ -653,7 +653,7 @@ async def got_campaign_name(message: types.Message, state: FSMContext):
     await state.update_data(campaign_name=message.text)
     await state.set_state(CampaignStates.campaign_objective)
     keyboard = ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text=k)] for k in OBJECTIVES.keys()],
+        keyboard=[[KeyboardButton(text=k)] for k in OBJECTIVES.keys()] + [[KeyboardButton(text="◀️ Назад")]],
         resize_keyboard=True, one_time_keyboard=True
     )
     await message.answer("Шаг 3/17 — Выбери цель рекламы:", reply_markup=keyboard)
@@ -670,6 +670,7 @@ async def got_objective(message: types.Message, state: FSMContext):
         keyboard=[
             [KeyboardButton(text="📊 На кампанию (CBO)")],
             [KeyboardButton(text="📁 На группу объявлений")],
+            [KeyboardButton(text="◀️ Назад")],
         ],
         resize_keyboard=True, one_time_keyboard=True
     )
@@ -690,6 +691,7 @@ async def got_budget_level(message: types.Message, state: FSMContext):
         keyboard=[
             [KeyboardButton(text="📅 Дневной")],
             [KeyboardButton(text="💰 Общий")],
+            [KeyboardButton(text="◀️ Назад")],
         ],
         resize_keyboard=True, one_time_keyboard=True
     )
@@ -706,7 +708,7 @@ async def got_budget_mode(message: types.Message, state: FSMContext):
         await message.answer("Выбери из списка 👇")
         return
     await state.set_state(CampaignStates.budget_amount)
-    await message.answer("Шаг 6/17 — Введи сумму бюджета (USD):", reply_markup=ReplyKeyboardRemove())
+    await message.answer("Шаг 6/17 — Введи сумму бюджета (USD):", reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="◀️ Назад")]], resize_keyboard=True))
 
 
 @dp.message(CampaignStates.budget_amount)
@@ -721,7 +723,7 @@ async def got_budget_amount(message: types.Message, state: FSMContext):
         return
     await state.update_data(budget=amount)
     await state.set_state(CampaignStates.adgroup_name)
-    await message.answer("Шаг 7/17 — Введи название группы объявлений:")
+    await message.answer("Шаг 7/17 — Введи название группы объявлений:", reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="◀️ Назад")]], resize_keyboard=True))
 
 
 @dp.message(CampaignStates.adgroup_name)
@@ -732,6 +734,7 @@ async def got_adgroup_name(message: types.Message, state: FSMContext):
         keyboard=[
             [KeyboardButton(text="🎵 Только TikTok")],
             [KeyboardButton(text="🌐 Автоматически")],
+            [KeyboardButton(text="◀️ Назад")],
         ],
         resize_keyboard=True, one_time_keyboard=True
     )
@@ -749,7 +752,7 @@ async def got_placement(message: types.Message, state: FSMContext):
         return
     await state.set_state(CampaignStates.geo)
     keyboard = ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text=k)] for k in COUNTRIES.keys()],
+        keyboard=[[KeyboardButton(text=k)] for k in COUNTRIES.keys()] + [[KeyboardButton(text="◀️ Назад")]],
         resize_keyboard=True, one_time_keyboard=True
     )
     await message.answer("Шаг 9/17 — Гео:", reply_markup=keyboard)
@@ -773,7 +776,7 @@ async def got_schedule_start(message: types.Message, state: FSMContext):
     await state.update_data(schedule_start=message.text)
     await state.set_state(CampaignStates.schedule_end)
     keyboard = ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="♾ Без даты окончания")]],
+        keyboard=[[KeyboardButton(text="♾ Без даты окончания")], [KeyboardButton(text="◀️ Назад")]],
         resize_keyboard=True, one_time_keyboard=True
     )
     await message.answer(
@@ -809,7 +812,7 @@ async def got_bid_type(message: types.Message, state: FSMContext):
     elif message.text == "✍️ Ручная ставка":
         await state.update_data(bid_type="BID_TYPE_CUSTOM")
         await state.set_state(CampaignStates.bid_amount)
-        await message.answer("Введи ставку (USD):", reply_markup=ReplyKeyboardRemove())
+        await message.answer("Шаг 12/17 — Введи ставку (USD):", reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="◀️ Назад")]], resize_keyboard=True))
     else:
         await message.answer("Выбери из списка 👇")
 
@@ -852,11 +855,14 @@ async def got_pixel_search(message: types.Message, state: FSMContext):
     await state.update_data(found_pixels=pixels)
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text=p.get("name") or f"Pixel {p['pixel_id']}",
+            text=p.get("name") or p["pixel_id"],
             callback_data=f"pixel_{p['pixel_id']}"
         )]
         for p in pixels[:10]
-    ] + [[InlineKeyboardButton(text="⏭ Пропустить", callback_data="pixel_skip")]])
+    ] + [
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="back_to_bid")],
+        [InlineKeyboardButton(text="⏭ Пропустить", callback_data="pixel_skip")]
+    ])
     await message.answer("Выбери пиксель:", reply_markup=keyboard)
     await state.set_state(CampaignStates.pixel_select)
 
@@ -1026,7 +1032,6 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
 
             # Если обложки нет — ищем через filtering
             if not video_cover_url:
-                await asyncio.sleep(10)
                 for _ in range(6):
                     search_resp = await session.get(
                         f"{base_url}/file/video/ad/search/",
@@ -1219,6 +1224,160 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
     except Exception as e:
         import traceback
         return False, f"{str(e)} | {traceback.format_exc()[-300:]}"
+
+
+
+# ─── Кнопки "Назад" ──────────────────────────────────────────────────────────
+
+async def show_step(state, msg_or_cb, step_name):
+    """Показывает нужный шаг"""
+    m = msg_or_cb if isinstance(msg_or_cb, types.Message) else msg_or_cb.message
+    data = await state.get_data()
+
+    if step_name == "select_advertisers":
+        selected = data.get("selected_advertisers", [])
+        await state.set_state(CampaignStates.select_advertisers)
+        await m.answer("Шаг 1/17 — Выбери рекламные кабинеты:", reply_markup=build_advertisers_keyboard(selected))
+
+    elif step_name == "campaign_name":
+        await state.set_state(CampaignStates.campaign_name)
+        kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="◀️ Назад")]], resize_keyboard=True)
+        await m.answer("Шаг 2/17 — Введи название кампании:", reply_markup=kb)
+
+    elif step_name == "campaign_objective":
+        await state.set_state(CampaignStates.campaign_objective)
+        keyboard = ReplyKeyboardMarkup(
+            keyboard=[[KeyboardButton(text=k)] for k in OBJECTIVES.keys()] + [[KeyboardButton(text="◀️ Назад")]],
+            resize_keyboard=True, one_time_keyboard=True
+        )
+        await m.answer("Шаг 3/17 — Выбери цель рекламы:", reply_markup=keyboard)
+
+    elif step_name == "budget_level":
+        await state.set_state(CampaignStates.budget_level)
+        keyboard = ReplyKeyboardMarkup(
+            keyboard=[[KeyboardButton(text="📊 На кампанию (CBO)")], [KeyboardButton(text="📁 На группу объявлений")], [KeyboardButton(text="◀️ Назад")]],
+            resize_keyboard=True, one_time_keyboard=True
+        )
+        await m.answer("Шаг 4/17 — Где устанавливать бюджет?", reply_markup=keyboard)
+
+    elif step_name == "budget_mode":
+        await state.set_state(CampaignStates.budget_mode)
+        keyboard = ReplyKeyboardMarkup(
+            keyboard=[[KeyboardButton(text="📅 Дневной")], [KeyboardButton(text="💰 Общий")], [KeyboardButton(text="◀️ Назад")]],
+            resize_keyboard=True, one_time_keyboard=True
+        )
+        await m.answer("Шаг 5/17 — Тип бюджета:", reply_markup=keyboard)
+
+    elif step_name == "budget_amount":
+        await state.set_state(CampaignStates.budget_amount)
+        kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="◀️ Назад")]], resize_keyboard=True)
+        await m.answer("Шаг 6/17 — Введи сумму бюджета (USD):", reply_markup=kb)
+
+    elif step_name == "adgroup_name":
+        await state.set_state(CampaignStates.adgroup_name)
+        kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="◀️ Назад")]], resize_keyboard=True)
+        await m.answer("Шаг 7/17 — Введи название группы объявлений:", reply_markup=kb)
+
+    elif step_name == "placement":
+        await state.set_state(CampaignStates.placement)
+        keyboard = ReplyKeyboardMarkup(
+            keyboard=[[KeyboardButton(text="🎵 Только TikTok")], [KeyboardButton(text="🌐 Автоматически")], [KeyboardButton(text="◀️ Назад")]],
+            resize_keyboard=True, one_time_keyboard=True
+        )
+        await m.answer("Шаг 8/17 — Плейсменты:", reply_markup=keyboard)
+
+    elif step_name == "geo":
+        await state.set_state(CampaignStates.geo)
+        keyboard = ReplyKeyboardMarkup(
+            keyboard=[[KeyboardButton(text=k)] for k in COUNTRIES.keys()] + [[KeyboardButton(text="◀️ Назад")]],
+            resize_keyboard=True, one_time_keyboard=True
+        )
+        await m.answer("Шаг 9/17 — Гео:", reply_markup=keyboard)
+
+    elif step_name == "schedule_start":
+        await state.set_state(CampaignStates.schedule_start)
+        kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="◀️ Назад")]], resize_keyboard=True)
+        await m.answer("Шаг 10/17 — Дата начала\nФормат: YYYY-MM-DD HH:MM:SS", reply_markup=kb)
+
+    elif step_name == "schedule_end":
+        await state.set_state(CampaignStates.schedule_end)
+        keyboard = ReplyKeyboardMarkup(
+            keyboard=[[KeyboardButton(text="♾ Без даты окончания")], [KeyboardButton(text="◀️ Назад")]],
+            resize_keyboard=True, one_time_keyboard=True
+        )
+        await m.answer("Шаг 11/17 — Дата окончания:", reply_markup=keyboard)
+
+    elif step_name == "bid_type":
+        await state.set_state(CampaignStates.bid_type)
+        keyboard = ReplyKeyboardMarkup(
+            keyboard=[[KeyboardButton(text="🤖 Автоставка")], [KeyboardButton(text="✍️ Ручная ставка")], [KeyboardButton(text="◀️ Назад")]],
+            resize_keyboard=True, one_time_keyboard=True
+        )
+        await m.answer("Шаг 12/17 — Ставка:", reply_markup=keyboard)
+
+    elif step_name == "pixel_search":
+        await state.set_state(CampaignStates.pixel_search)
+        kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="◀️ Назад")]], resize_keyboard=True)
+        await m.answer("Шаг 13/17 — Пиксель\nВведи часть названия или ID\nИли . чтобы показать все пиксели\nИли /skippixel чтобы пропустить:", reply_markup=kb)
+
+    elif step_name == "video_upload":
+        await state.set_state(CampaignStates.video_upload)
+        kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="◀️ Назад")]], resize_keyboard=True)
+        await m.answer("Шаг 14/17 — Отправь видео файлом (не как медиа)\n/restart — начать заново", reply_markup=kb)
+
+    elif step_name == "ad_text":
+        await state.set_state(CampaignStates.ad_text)
+        kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="◀️ Назад")]], resize_keyboard=True)
+        await m.answer("Шаг 15/17 — Текст объявления (до 100 символов):", reply_markup=kb)
+
+    elif step_name == "ad_url":
+        await state.set_state(CampaignStates.ad_url)
+        kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="◀️ Назад")]], resize_keyboard=True)
+        await m.answer("Шаг 16/17 — Ссылка на лендинг (URL):", reply_markup=kb)
+
+
+# Маппинг шагов назад
+BACK_MAP = {
+    CampaignStates.campaign_name: "select_advertisers",
+    CampaignStates.campaign_objective: "campaign_name",
+    CampaignStates.budget_level: "campaign_objective",
+    CampaignStates.budget_mode: "budget_level",
+    CampaignStates.budget_amount: "budget_mode",
+    CampaignStates.adgroup_name: "budget_amount",
+    CampaignStates.placement: "adgroup_name",
+    CampaignStates.geo: "placement",
+    CampaignStates.schedule_start: "geo",
+    CampaignStates.schedule_end: "schedule_start",
+    CampaignStates.bid_type: "schedule_end",
+    CampaignStates.bid_amount: "bid_type",
+    CampaignStates.pixel_search: "bid_type",
+    CampaignStates.pixel_select: "pixel_search",
+    CampaignStates.video_upload: "pixel_search",
+    CampaignStates.ad_text: "video_upload",
+    CampaignStates.ad_url: "ad_text",
+}
+
+
+@dp.message(F.text == "◀️ Назад")
+async def go_back(message: types.Message, state: FSMContext):
+    current = await state.get_state()
+    # Конвертируем строку состояния в объект
+    for state_obj, back_step in BACK_MAP.items():
+        if current == state_obj:
+            await show_step(state, message, back_step)
+            return
+    # Если не нашли — возвращаем к выбору кабинетов
+    await show_step(state, message, "select_advertisers")
+
+
+@dp.callback_query(F.data == "back_to_bid")
+async def back_to_bid(callback: types.CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    if data.get("bid_type") == "BID_TYPE_CUSTOM":
+        await show_step(state, callback, "bid_amount")
+    else:
+        await show_step(state, callback, "bid_type")
+    await callback.answer()
 
 
 loop = None
