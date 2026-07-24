@@ -865,7 +865,7 @@ async def got_bid_type(message: types.Message, state: FSMContext):
         await state.update_data(bid_type="BID_TYPE_NO_BID", bid_amount=None)
         await show_pixel_list(message, state)
     elif message.text == "✍️ Ручная ставка":
-        await state.update_data(bid_type="BID_TYPE_CUSTOM")
+        await state.update_data(bid_type="BID_TYPE_CUSTOM", bid_amount=None)
         await state.set_state(CampaignStates.bid_amount)
         await message.answer("Шаг 12/17 — Введи ставку (USD):", reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="◀️ Назад")]], resize_keyboard=True))
     else:
@@ -883,6 +883,7 @@ async def got_bid_amount(message: types.Message, state: FSMContext):
         await message.answer("❌ Введи число. Например: 5")
         return
     await state.update_data(bid_amount=bid)
+    await log_api("BID AMOUNT SAVED", {"bid_amount": bid, "bid_type": (await state.get_data()).get("bid_type")}, {})
     await show_pixel_list(message, state)
 
 
