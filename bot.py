@@ -809,15 +809,61 @@ async def got_schedule_end(message: types.Message, state: FSMContext):
     await message.answer("Шаг 12/17 — Ставка:", reply_markup=keyboard)
 
 
+async def show_pixel_list(message_or_callback, state: FSMContext):
+    """Показывает список пикселей из всех выбранных кабинетов"""
+    m = message_or_callback if isinstance(message_or_callback, types.Message) else message_or_callback.message
+    data = await state.get_data()
+    selected = data.get("selected_advertisers", [])
+
+    await m.answer("🔍 Загружаю пиксели...", reply_markup=ReplyKeyboardRemove())
+
+    all_pixels = {}  # pixel_id -> {name, advertisers}
+    text_lines = []
+
+    for adv_id in selected:
+        name = ADVERTISERS.get(adv_id, adv_id)
+        pixels = await search_pixels(adv_id, "")
+        if pixels:
+            text_lines.append(f"📋 {name}:")
+            for p in pixels[:5]:
+                pid = p["pixel_id"]
+                pname = p.get("name") or pid
+                text_lines.append(f"  • {pname}")
+                if pid not in all_pixels:
+                    all_pixels[pid] = {"name": pname, "advertisers": []}
+                all_pixels[pid]["advertisers"].append(adv_id)
+
+    if not all_pixels:
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ Назад", callback_data="back_to_bid")],
+            [InlineKeyboardButton(text="⏭ Пропустить", callback_data="pixel_skip")]
+        ])
+        await m.answer("❌ Пиксели не найдены ни в одном кабинете.", reply_markup=keyboard)
+        return
+
+    # Показываем текстовый список
+    await m.answer("Шаг 13/17 — Пиксели по кабинетам:\n\n" + "\n".join(text_lines))
+
+    # Показываем кнопки выбора (уникальные пиксели)
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=info["name"],
+            callback_data=f"pixel_{pid}"
+        )]
+        for pid, info in list(all_pixels.items())[:15]
+    ] + [
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="back_to_bid")],
+        [InlineKeyboardButton(text="⏭ Пропустить", callback_data="pixel_skip")]
+    ])
+    await m.answer("Выбери пиксель:", reply_markup=keyboard)
+    await state.set_state(CampaignStates.pixel_select)
+
+
 @dp.message(CampaignStates.bid_type, F.text != "◀️ Назад")
 async def got_bid_type(message: types.Message, state: FSMContext):
     if message.text == "🤖 Автоставка":
         await state.update_data(bid_type="BID_TYPE_NO_BID", bid_amount=None)
-        await state.set_state(CampaignStates.pixel_search)
-        await message.answer(
-            "Шаг 13/17 — Пиксель\nВведи часть названия для поиска\nИли /skippixel чтобы пропустить:",
-            reply_markup=ReplyKeyboardRemove()
-        )
+        await show_pixel_list(message, state)
     elif message.text == "✍️ Ручная ставка":
         await state.update_data(bid_type="BID_TYPE_CUSTOM")
         await state.set_state(CampaignStates.bid_amount)
@@ -837,43 +883,20 @@ async def got_bid_amount(message: types.Message, state: FSMContext):
         await message.answer("❌ Введи число. Например: 5")
         return
     await state.update_data(bid_amount=bid)
-    await state.set_state(CampaignStates.pixel_search)
-    await message.answer(
-        "Шаг 13/17 — Пиксель\nВведи часть названия для поиска\nИли /skippixel чтобы пропустить:"
-    )
+    await show_pixel_list(message, state)
 
 
 @dp.message(Command("skippixel"))
 async def skip_pixel(message: types.Message, state: FSMContext):
     await state.update_data(pixel_id=None)
     await state.set_state(CampaignStates.video_upload)
-    await message.answer("Шаг 14/17 — Отправь видео файлом (не как медиа)\n⚠️ Если не загружается — уменьши размер\n/restart — начать заново")
+    await message.answer("Шаг 14/17 — Отправь видео файлом (не как медиа)")
 
 
 @dp.message(CampaignStates.pixel_search, F.text != "◀️ Назад")
 async def got_pixel_search(message: types.Message, state: FSMContext):
-    query = message.text.strip()
-    await message.answer(f"🔍 Ищу пиксели с '{query}'...")
-    data = await state.get_data()
-    selected = data.get("selected_advertisers", [])
-    adv_id = selected[0] if selected else list(ADVERTISERS.keys())[0]
-    pixels = await search_pixels(adv_id, query)
-    if not pixels:
-        await message.answer(f"❌ Пиксели с '{query}' не найдены.\nПопробуй другой запрос или /skippixel")
-        return
-    await state.update_data(found_pixels=pixels)
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text=p.get("name") or p["pixel_id"],
-            callback_data=f"pixel_{p['pixel_id']}"
-        )]
-        for p in pixels[:10]
-    ] + [
-        [InlineKeyboardButton(text="◀️ Назад", callback_data="back_to_bid")],
-        [InlineKeyboardButton(text="⏭ Пропустить", callback_data="pixel_skip")]
-    ])
-    await message.answer("Выбери пиксель:", reply_markup=keyboard)
-    await state.set_state(CampaignStates.pixel_select)
+    # Оставляем для совместимости — перенаправляем на список
+    await show_pixel_list(message, state)
 
 
 @dp.callback_query(F.data.startswith("pixel_") & ~F.data.endswith("skip"))
@@ -1108,12 +1131,16 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                     "targeting_spec": {"location_ids": [str(data["geo"])]},
                     "request_id": str(int(time.time() * 1000)),
                 }
-                if data.get("bid_amount"):
+                if data.get("bid_amount") and data.get("bid_type") == "BID_TYPE_CUSTOM":
                     sp_adgroup_payload["bid_price"] = data["bid_amount"]
                 if data.get("schedule_end"):
                     sp_adgroup_payload["schedule_end_time"] = data["schedule_end"]
+                # Проверяем что пиксель существует в этом кабинете
                 if data.get("pixel_id"):
-                    sp_adgroup_payload["pixel_id"] = data["pixel_id"]
+                    pixels = await search_pixels(advertiser_id, "")
+                    pixel_ids = [p["pixel_id"] for p in pixels]
+                    if data["pixel_id"] in pixel_ids:
+                        sp_adgroup_payload["pixel_id"] = data["pixel_id"]
 
                 sp_adgroup_resp = await session.post(f"{base_url}/smart_plus/adgroup/create/", json=sp_adgroup_payload, headers=headers)
                 sp_adgroup_data = await sp_adgroup_resp.json()
