@@ -375,6 +375,7 @@ async def cmd_start(message: types.Message):
         "👋 TikTok Ads Manager Bot\n\n"
         "📢 Реклама:\n"
         "/newcampaign — создать рекламную кампанию\n"
+        "/mycampaigns — просмотр и удаление кампаний\n"
         "/deletecampaign — удалить кампанию по ID\n\n"
         "📱 Постинг:\n"
         "/connect — подключить TikTok аккаунт\n"
@@ -428,6 +429,139 @@ async def cmd_delete_campaign(message: types.Message):
             await message.answer(f"✅ Кампания {campaign_id} удалена")
         else:
             await message.answer(f"❌ Ошибка: {d.get('message')}")
+
+
+class DeleteCampaignStates(StatesGroup):
+    select_advertiser = State()
+    select_campaigns  = State()
+    confirm_delete    = State()
+
+
+@dp.message(Command("mycampaigns"))
+async def cmd_mycampaigns(message: types.Message, state: FSMContext):
+    await state.set_state(DeleteCampaignStates.select_advertiser)
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=name, callback_data=f"deladv_{adv_id}")]
+        for adv_id, name in list(ADVERTISERS.items())[:20]
+    ])
+    await message.answer("Выбери кабинет для просмотра кампаний:", reply_markup=keyboard)
+
+
+@dp.callback_query(F.data.startswith("deladv_"))
+async def got_delete_advertiser(callback: types.CallbackQuery, state: FSMContext):
+    adv_id = callback.data.replace("deladv_", "")
+    await state.update_data(delete_adv_id=adv_id, delete_camp_ids=[])
+
+    async with aiohttp.ClientSession() as session:
+        headers = {"Access-Token": MARKETING_TOKEN}
+        base_url = "https://business-api.tiktok.com/open_api/v1.3"
+        r = await session.get(f"{base_url}/smart_plus/campaign/get/",
+            params={"advertiser_id": adv_id, "page_size": 20}, headers=headers)
+        d = await r.json()
+        camps = d.get("data", {}).get("list", [])
+
+    if not camps:
+        await callback.message.answer("Нет активных кампаний в этом кабинете.")
+        await callback.answer()
+        return
+
+    await state.update_data(delete_camps=camps)
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=f"☐ {c['campaign_name'][:40]}",
+            callback_data=f"delcamp_{c['campaign_id']}"
+        )]
+        for c in camps
+    ] + [[InlineKeyboardButton(text="🗑 Удалить выбранные", callback_data="confirm_delete")]])
+
+    await callback.message.answer(
+        f"Кампании в {ADVERTISERS.get(adv_id, adv_id)}:\nВыбери для удаления:",
+        reply_markup=keyboard
+    )
+    await state.set_state(DeleteCampaignStates.select_campaigns)
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("delcamp_"))
+async def toggle_delete_campaign(callback: types.CallbackQuery, state: FSMContext):
+    camp_id = callback.data.replace("delcamp_", "")
+    data = await state.get_data()
+    selected = data.get("delete_camp_ids", [])
+    camps = data.get("delete_camps", [])
+
+    if camp_id in selected:
+        selected.remove(camp_id)
+    else:
+        selected.append(camp_id)
+    await state.update_data(delete_camp_ids=selected)
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=f"{'✅' if c['campaign_id'] in selected else '☐'} {c['campaign_name'][:40]}",
+            callback_data=f"delcamp_{c['campaign_id']}"
+        )]
+        for c in camps
+    ] + [[InlineKeyboardButton(text=f"🗑 Удалить выбранные ({len(selected)})", callback_data="confirm_delete")]])
+
+    try:
+        await callback.message.edit_reply_markup(reply_markup=keyboard)
+    except Exception:
+        pass
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "confirm_delete")
+async def confirm_delete_campaigns(callback: types.CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    selected = data.get("delete_camp_ids", [])
+    adv_id = data.get("delete_adv_id")
+
+    if not selected:
+        await callback.answer("Выбери хотя бы одну кампанию!", show_alert=True)
+        return
+
+    camps = data.get("delete_camps", [])
+    names = [c["campaign_name"] for c in camps if c["campaign_id"] in selected]
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Да, удалить", callback_data="do_delete")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_delete")],
+    ])
+    await callback.message.answer(
+        f"⚠️ Удалить {len(selected)} кампаний?\n\n" + "\n".join(f"• {n}" for n in names),
+        reply_markup=keyboard
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "do_delete")
+async def do_delete_campaigns(callback: types.CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    selected = data.get("delete_camp_ids", [])
+    adv_id = data.get("delete_adv_id")
+
+    async with aiohttp.ClientSession() as session:
+        headers = {"Access-Token": MARKETING_TOKEN, "Content-Type": "application/json"}
+        base_url = "https://business-api.tiktok.com/open_api/v1.3"
+        r = await session.post(f"{base_url}/smart_plus/campaign/status/update/",
+            headers=headers,
+            json={"advertiser_id": adv_id, "campaign_ids": selected, "operation_status": "DELETE"})
+        d = await r.json()
+
+    if d.get("code") == 0:
+        await callback.message.answer(f"✅ Удалено {len(selected)} кампаний")
+    else:
+        await callback.message.answer(f"❌ Ошибка: {d.get('message')}")
+
+    await state.clear()
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "cancel_delete")
+async def cancel_delete(callback: types.CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback.message.answer("❌ Удаление отменено")
+    await callback.answer()
 
 
 @dp.message(Command("connect"))
@@ -1091,6 +1225,11 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
         }
         base_url = "https://business-api.tiktok.com/open_api/v1.3"
         objective = data["objective"]
+
+        # Получаем video_path из videos списка если не передан напрямую
+        videos = data.get("videos", [])
+        if not video_path and videos:
+            video_path = videos[0].get("video_path")
 
         async with aiohttp.ClientSession() as session:
             identity = await get_identity(advertiser_id, session, base_url, headers)
