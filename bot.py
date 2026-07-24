@@ -798,15 +798,22 @@ async def got_schedule_start(message: types.Message, state: FSMContext):
 async def got_schedule_end(message: types.Message, state: FSMContext):
     end = None if message.text == "♾ Без даты окончания" else message.text
     await state.update_data(schedule_end=end)
-    await state.set_state(CampaignStates.bid_type)
-    keyboard = ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="🤖 Автоставка")],
-            [KeyboardButton(text="✍️ Ручная ставка")],
-        ],
-        resize_keyboard=True, one_time_keyboard=True
-    )
-    await message.answer("Шаг 12/17 — Ставка:", reply_markup=keyboard)
+    data = await state.get_data()
+    if data.get("objective") == "LEAD_GENERATION":
+        # Smart+ не поддерживает ручную ставку
+        await state.update_data(bid_type="BID_TYPE_NO_BID", bid_amount=None)
+        await show_pixel_list(message, state)
+    else:
+        await state.set_state(CampaignStates.bid_type)
+        keyboard = ReplyKeyboardMarkup(
+            keyboard=[
+                [KeyboardButton(text="🤖 Автоставка")],
+                [KeyboardButton(text="✍️ Ручная ставка")],
+                [KeyboardButton(text="◀️ Назад")],
+            ],
+            resize_keyboard=True, one_time_keyboard=True
+        )
+        await message.answer("Шаг 12/17 — Ставка:", reply_markup=keyboard)
 
 
 async def show_pixel_list(message_or_callback, state: FSMContext):
@@ -958,29 +965,71 @@ async def got_campaign_video(message: types.Message, state: FSMContext):
         await state.update_data(video_path=video_path)
         await state.set_state(CampaignStates.ad_text)
         size = os.path.getsize(video_path)
-        await message.answer(f"✅ Видео скачано ({size//1024//1024} MB)!\n\nШаг 15/17 — Текст объявления (до 100 символов):")
+        data = await state.get_data()
+        videos = data.get("videos", [])
+        await message.answer(
+            f"✅ Видео {len(videos)+1} скачано ({size//1024//1024} MB)!\n\nВведи текст объявления (до 100 символов):",
+            reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="◀️ Назад")]], resize_keyboard=True)
+        )
     except Exception as e:
         await message.answer(f"❌ Ошибка скачивания видео: {e}\n/restart — начать заново")
 
 
 @dp.message(CampaignStates.ad_text, F.text != "◀️ Назад")
 async def got_ad_text(message: types.Message, state: FSMContext):
-    await state.update_data(ad_text=message.text[:100])
+    data = await state.get_data()
+    # Сохраняем текущее видео + текст в список
+    videos = data.get("videos", [])
+    videos.append({
+        "video_path": data.get("video_path"),
+        "ad_text": message.text[:100]
+    })
+    await state.update_data(videos=videos, video_path=None)
+
+    keyboard = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="➕ Добавить ещё видео")],
+            [KeyboardButton(text="✅ Готово, ввести URL")],
+        ],
+        resize_keyboard=True, one_time_keyboard=True
+    )
+    await message.answer(
+        f"✅ Видео {len(videos)} добавлено с текстом.\n\nДобавить ещё видео или перейти к URL?",
+        reply_markup=keyboard
+    )
     await state.set_state(CampaignStates.ad_url)
-    await message.answer("Шаг 16/17 — Ссылка на лендинг (URL):")
 
 
-@dp.message(CampaignStates.ad_url, F.text != "◀️ Назад")
+@dp.message(CampaignStates.ad_url, F.text == "➕ Добавить ещё видео")
+async def add_more_video(message: types.Message, state: FSMContext):
+    await state.set_state(CampaignStates.video_upload)
+    await message.answer(
+        "Отправь следующее видео файлом:",
+        reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="◀️ Назад")]], resize_keyboard=True)
+    )
+
+
+@dp.message(CampaignStates.ad_url, F.text == "✅ Готово, ввести URL")
+async def ready_for_url(message: types.Message, state: FSMContext):
+    await message.answer(
+        "Шаг 16/17 — Ссылка на лендинг (URL):",
+        reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="◀️ Назад")]], resize_keyboard=True)
+    )
+
+
+@dp.message(CampaignStates.ad_url, F.text != "◀️ Назад", F.text != "➕ Добавить ещё видео", F.text != "✅ Готово, ввести URL")
 async def got_ad_url(message: types.Message, state: FSMContext):
     await state.update_data(ad_url=message.text)
     data = await state.get_data()
     selected = data.get("selected_advertisers", [])
     names = [ADVERTISERS.get(a, a) for a in selected]
+    videos = data.get("videos", [])
     text = (
         f"Шаг 17/17 — Подтверждение\n\n"
         f"📋 {data['campaign_name']}\n"
         f"🎯 Цель: {data['objective']}\n"
         f"💰 Бюджет: {data['budget']} USD\n"
+        f"🎬 Видео: {len(videos)} шт.\n"
         f"📁 Кабинетов: {len(selected)}\n\n" +
         "\n".join(f"• {n}" for n in names)
     )
@@ -996,14 +1045,17 @@ async def create_campaign(callback: types.CallbackQuery, state: FSMContext):
         return
 
     await callback.message.answer(
-        f"⏳ Создаю кампанию {data['campaign_name']} на {len(selected)} кабинетах...\nСкачиваю видео на сервер..."
+        f"⏳ Создаю кампанию {data['campaign_name']} на {len(selected)} кабинетах..."
     )
     await state.clear()
 
     await callback.message.answer("⏳ Создаю кампании...")
 
+    videos = data.get("videos", [])
     video_path = data.get("video_path")
-    if not video_path or not os.path.exists(video_path):
+
+    # Проверяем что есть хотя бы одно видео
+    if not videos and (not video_path or not os.path.exists(video_path)):
         await callback.message.answer("❌ Видео не найдено. Начни заново /newcampaign")
         return
 
@@ -1018,6 +1070,11 @@ async def create_campaign(callback: types.CallbackQuery, state: FSMContext):
             except Exception:
                 await asyncio.sleep(3)
 
+    # Удаляем все временные видео
+    for vid_item in videos:
+        vp = vid_item.get("video_path")
+        if vp and os.path.exists(vp):
+            os.remove(vp)
     if video_path and os.path.exists(video_path):
         os.remove(video_path)
 
@@ -1133,7 +1190,7 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                     "request_id": str(int(time.time() * 1000)),
                 }
                 if data.get("bid_amount") and data.get("bid_type") == "BID_TYPE_CUSTOM":
-                    sp_adgroup_payload["bid_price"] = data["bid_amount"]
+                    sp_adgroup_payload["bid_price"] = float(data["bid_amount"])
                 if data.get("schedule_end"):
                     sp_adgroup_payload["schedule_end_time"] = data["schedule_end"]
                 # Проверяем что пиксель существует в этом кабинете
@@ -1150,34 +1207,93 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                     return False, f"Ошибка группы: {sp_adgroup_data.get('message')}"
                 adgroup_id = sp_adgroup_data["data"]["adgroup_id"]
 
-                creative_info = {
-                            "ad_format": "SINGLE_VIDEO",
-                            "video_info": {"video_id": video_id},
-                            "image_info": [{"web_uri": web_uri}],
-                            "identity_type": identity["identity_type"],
-                            "identity_id": identity["identity_id"],
-                            "identity_authorized_bc_id": identity.get("identity_authorized_bc_id", ""),
-                        }
-                if identity.get("ads_only_mode"):
-                    creative_info["dark_post_status"] = "ON"
+                # Объявления — по одному для каждого видео
+                videos = data.get("videos", [])
+                if not videos:
+                    # Обратная совместимость — одно видео
+                    videos = [{"video_path": video_path, "ad_text": data.get("ad_text", "")}]
 
-                # Объявление
-                sp_ad_payload = {
-                    "advertiser_id": advertiser_id,
-                    "adgroup_id": adgroup_id,
-                    "ad_name": data["campaign_name"],
-                    "creative_list": [{"creative_info": creative_info}],
-                    "ad_text_list": [{"ad_text": data.get("ad_text", "")}],
-                    "landing_page_url_list": [{"landing_page_url": data.get("ad_url", "")}] if data.get("ad_url") else [],
-                    "call_to_action_list": [{"call_to_action": "LEARN_MORE"}],
-                }
-                sp_ad_resp = await session.post(f"{base_url}/smart_plus/ad/create/", json=sp_ad_payload, headers=headers)
-                sp_ad_data = await sp_ad_resp.json()
-                await log_api("SMART+ AD CREATE", sp_ad_payload, sp_ad_data)
-                if sp_ad_data.get("code") != 0:
-                    return False, f"Ошибка объявления: {sp_ad_data.get('message')}"
+                ad_ids = []
+                for i, vid_item in enumerate(videos):
+                    # Загружаем видео для этого объявления
+                    vid_path = vid_item.get("video_path") or video_path
+                    with open(vid_path, "rb") as f:
+                        vbytes = f.read()
+                    vmd5 = hashlib.md5(vbytes).hexdigest()
+                    vform = aiohttp.FormData()
+                    vform.add_field("advertiser_id", advertiser_id)
+                    vform.add_field("upload_type", "UPLOAD_BY_FILE")
+                    vform.add_field("video_signature", vmd5)
+                    vform.add_field("video_file", vbytes,
+                        filename=f"video_{advertiser_id}_{int(time.time())}_{i}.mp4",
+                        content_type="video/mp4")
+                    vup_resp = await session.post(
+                        f"{base_url}/file/video/ad/upload/",
+                        data=vform,
+                        headers={"Access-Token": MARKETING_TOKEN}
+                    )
+                    vup_data = await vup_resp.json()
+                    if vup_data.get("code") != 0:
+                        continue
+                    vd = vup_data["data"]
+                    vid_id = vd[0]["video_id"] if isinstance(vd, list) else vd["video_id"]
+                    vid_cover_url = vd[0].get("video_cover_url") if isinstance(vd, list) else vd.get("video_cover_url")
 
-                return True, f"campaign: {campaign_id} | ad: {sp_ad_data['data']['smart_plus_ad_id']}"
+                    # Ищем обложку
+                    vid_web_uri = None
+                    if not vid_cover_url:
+                        for _ in range(6):
+                            sr = await session.get(f"{base_url}/file/video/ad/search/",
+                                params={"advertiser_id": advertiser_id, "filtering": f'{{"video_ids":["{vid_id}"]}}'},
+                                headers=headers)
+                            sd = await sr.json()
+                            vlist = sd.get("data", {}).get("list", [])
+                            if vlist and vlist[0].get("video_cover_url"):
+                                vid_cover_url = vlist[0]["video_cover_url"]
+                                break
+                            await asyncio.sleep(10)
+
+                    if vid_cover_url:
+                        cr = await session.post(f"{base_url}/file/image/ad/upload/",
+                            json={"advertiser_id": advertiser_id, "upload_type": "UPLOAD_BY_URL", "image_url": vid_cover_url},
+                            headers=headers)
+                        cd = await cr.json()
+                        if cd.get("code") == 0:
+                            vid_web_uri = cd["data"]["image_id"]
+
+                    if not vid_web_uri:
+                        continue
+
+                    ci = {
+                        "ad_format": "SINGLE_VIDEO",
+                        "video_info": {"video_id": vid_id},
+                        "image_info": [{"web_uri": vid_web_uri}],
+                        "identity_type": identity["identity_type"],
+                        "identity_id": identity["identity_id"],
+                        "identity_authorized_bc_id": identity.get("identity_authorized_bc_id", ""),
+                    }
+                    if identity.get("ads_only_mode"):
+                        ci["dark_post_status"] = "ON"
+
+                    sp_ad_payload = {
+                        "advertiser_id": advertiser_id,
+                        "adgroup_id": adgroup_id,
+                        "ad_name": f"{data['campaign_name']} #{i+1}",
+                        "creative_list": [{"creative_info": ci}],
+                        "ad_text_list": [{"ad_text": vid_item.get("ad_text", "")}],
+                        "landing_page_url_list": [{"landing_page_url": data.get("ad_url", "")}] if data.get("ad_url") else [],
+                        "call_to_action_list": [{"call_to_action": "LEARN_MORE"}],
+                    }
+                    sp_ad_resp = await session.post(f"{base_url}/smart_plus/ad/create/", json=sp_ad_payload, headers=headers)
+                    sp_ad_data = await sp_ad_resp.json()
+                    await log_api("SMART+ AD CREATE", sp_ad_payload, sp_ad_data)
+                    if sp_ad_data.get("code") == 0:
+                        ad_ids.append(sp_ad_data["data"]["smart_plus_ad_id"])
+
+                if not ad_ids:
+                    return False, "Не удалось создать ни одного объявления"
+
+                return True, f"campaign: {campaign_id} | ads: {len(ad_ids)} шт."
 
             else:
                 # ── Обычный flow для остальных целей ─────────────────────────
