@@ -1523,10 +1523,15 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                 }
                 if not budget_optimize_on:
                     # Бюджет на группу объявлений — выбрано на шаге 4
+                    # Подтверждено тестом API: для Smart+ adgroup дневной бюджет требует
+                    # BUDGET_MODE_DYNAMIC_DAILY_BUDGET, а не обычный BUDGET_MODE_DAY
+                    ag_budget_mode = data.get("budget_mode", "BUDGET_MODE_DAY")
+                    if ag_budget_mode == "BUDGET_MODE_DAY":
+                        ag_budget_mode = "BUDGET_MODE_DYNAMIC_DAILY_BUDGET"
                     sp_adgroup_payload["budget"] = data["budget"]
-                    sp_adgroup_payload["budget_mode"] = data.get("budget_mode", "BUDGET_MODE_DAY")
+                    sp_adgroup_payload["budget_mode"] = ag_budget_mode
                 if data.get("bid_amount") and data.get("bid_type") == "BID_TYPE_CUSTOM":
-                    sp_adgroup_payload["bid"] = float(data["bid_amount"])
+                    sp_adgroup_payload["conversion_bid_price"] = float(data["bid_amount"])
                 if data.get("schedule_end"):
                     sp_adgroup_payload["schedule_end_time"] = data["schedule_end"]
                 if data.get("comment_disabled"):
