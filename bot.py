@@ -139,8 +139,8 @@ class CampaignStates(StatesGroup):
     select_advertisers = State()
     campaign_name      = State()
     campaign_objective = State()
-    budget_level       = State()   # кампания или группа
-    budget_mode        = State()   # дневной или общий
+    budget_level       = State()
+    budget_mode        = State()
     budget_amount      = State()
     adgroup_name       = State()
     placement          = State()
@@ -151,6 +151,10 @@ class CampaignStates(StatesGroup):
     bid_amount         = State()
     pixel_search       = State()
     pixel_select       = State()
+    pixel_event        = State()
+    gender             = State()
+    age_groups         = State()
+    content_settings   = State()
     video_upload       = State()
     ad_text            = State()
     ad_url             = State()
@@ -1046,16 +1050,192 @@ async def got_pixel_select(callback: types.CallbackQuery, state: FSMContext):
     pixel_id = callback.data.replace("pixel_", "")
     await state.update_data(pixel_id=pixel_id)
     await callback.message.answer(f"✅ Пиксель: {pixel_id}")
-    await state.set_state(CampaignStates.video_upload)
-    await callback.message.answer("Шаг 14/17 — Отправь видео файлом (не как медиа)\n⚠️ Если не загружается — уменьши размер\n/restart — начать заново")
+    await show_pixel_event(callback.message, state)
     await callback.answer()
 
 
 @dp.callback_query(F.data == "pixel_skip")
 async def skip_pixel_callback(callback: types.CallbackQuery, state: FSMContext):
-    await state.update_data(pixel_id=None)
-    await state.set_state(CampaignStates.video_upload)
-    await callback.message.answer("Шаг 14/17 — Отправь видео файлом (не как медиа)\n⚠️ Если не загружается — уменьши размер\n/restart — начать заново")
+    await state.update_data(pixel_id=None, optimization_event=None)
+    await show_gender_step(callback.message, state)
+    await callback.answer()
+
+
+async def show_pixel_event(m, state: FSMContext):
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📋 Заполненная форма", callback_data="event_FORM")],
+        [InlineKeyboardButton(text="🛒 Покупка", callback_data="event_SHOPPING")],
+        [InlineKeyboardButton(text="📝 Регистрация", callback_data="event_ON_WEB_REGISTER")],
+        [InlineKeyboardButton(text="📞 Контакт", callback_data="event_CONSULT")],
+        [InlineKeyboardButton(text="⏭ Пропустить", callback_data="event_skip")],
+    ])
+    await m.answer("Шаг 13б — Событие пикселя:", reply_markup=keyboard)
+    await state.set_state(CampaignStates.pixel_event)
+
+
+@dp.callback_query(F.data.startswith("event_"))
+async def got_pixel_event(callback: types.CallbackQuery, state: FSMContext):
+    event = callback.data.replace("event_", "")
+    if event == "skip":
+        await state.update_data(optimization_event=None)
+    else:
+        await state.update_data(optimization_event=event)
+        await callback.message.answer(f"✅ Событие: {event}")
+    await show_gender_step(callback.message, state)
+    await callback.answer()
+
+
+async def show_gender_step(m, state: FSMContext):
+    keyboard = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="👥 Все")],
+            [KeyboardButton(text="👨 Мужчины")],
+            [KeyboardButton(text="👩 Женщины")],
+        ],
+        resize_keyboard=True, one_time_keyboard=True
+    )
+    await m.answer("Шаг 13в — Пол аудитории:", reply_markup=keyboard)
+    await state.set_state(CampaignStates.gender)
+
+
+@dp.message(CampaignStates.gender, F.text != "◀️ Назад")
+async def got_gender(message: types.Message, state: FSMContext):
+    mapping = {
+        "👥 Все": [],
+        "👨 Мужчины": ["GENDER_MALE"],
+        "👩 Женщины": ["GENDER_FEMALE"],
+    }
+    if message.text not in mapping:
+        await message.answer("Выбери из списка 👇")
+        return
+    await state.update_data(genders=mapping[message.text])
+    await show_age_step(message, state)
+
+
+async def show_age_step(m, state: FSMContext):
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Выбрать все", callback_data="age_all")],
+        [InlineKeyboardButton(text="18-24", callback_data="age_AGE_18_24"),
+         InlineKeyboardButton(text="25-34", callback_data="age_AGE_25_34")],
+        [InlineKeyboardButton(text="35-44", callback_data="age_AGE_35_44"),
+         InlineKeyboardButton(text="45-54", callback_data="age_AGE_45_54")],
+        [InlineKeyboardButton(text="55+", callback_data="age_AGE_55_UP")],
+        [InlineKeyboardButton(text="➡️ Далее", callback_data="age_done")],
+    ])
+    await m.answer("Шаг 13г — Возраст (можно несколько):", reply_markup=keyboard)
+    await state.set_state(CampaignStates.age_groups)
+
+
+@dp.callback_query(F.data.startswith("age_"))
+async def got_age(callback: types.CallbackQuery, state: FSMContext):
+    action = callback.data.replace("age_", "")
+    data = await state.get_data()
+    ages = data.get("age_groups", [])
+
+    if action == "all":
+        ages = ["AGE_18_24", "AGE_25_34", "AGE_35_44", "AGE_45_54", "AGE_55_UP"]
+        await state.update_data(age_groups=ages)
+        await callback.answer(f"Выбраны все возрасты")
+    elif action == "done":
+        if not ages:
+            ages = []
+        await state.update_data(age_groups=ages)
+        await show_content_settings(callback.message, state)
+        await callback.answer()
+        return
+    else:
+        if action in ages:
+            ages.remove(action)
+        else:
+            ages.append(action)
+        await state.update_data(age_groups=ages)
+        await callback.answer(f"Выбрано: {len(ages)}")
+
+    # Обновляем клавиатуру
+    all_ages = ["AGE_18_24", "AGE_25_34", "AGE_35_44", "AGE_45_54", "AGE_55_UP"]
+    labels = {"AGE_18_24": "18-24", "AGE_25_34": "25-34", "AGE_35_44": "35-44",
+              "AGE_45_54": "45-54", "AGE_55_UP": "55+"}
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Выбрать все", callback_data="age_all")],
+        [InlineKeyboardButton(
+            text=f"{'✅' if a in ages else '☐'} {labels[a]}",
+            callback_data=f"age_{a}"
+        ) for a in all_ages[:2]],
+        [InlineKeyboardButton(
+            text=f"{'✅' if a in ages else '☐'} {labels[a]}",
+            callback_data=f"age_{a}"
+        ) for a in all_ages[2:4]],
+        [InlineKeyboardButton(
+            text=f"{'✅' if 'AGE_55_UP' in ages else '☐'} 55+",
+            callback_data="age_AGE_55_UP"
+        )],
+        [InlineKeyboardButton(text=f"➡️ Далее ({len(ages)} выбрано)", callback_data="age_done")],
+    ])
+    try:
+        await callback.message.edit_reply_markup(reply_markup=keyboard)
+    except Exception:
+        pass
+
+
+async def show_content_settings(m, state: FSMContext):
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💬 Выкл. комментарии", callback_data="content_comments")],
+        [InlineKeyboardButton(text="📥 Выкл. скачивание", callback_data="content_download")],
+        [InlineKeyboardButton(text="🔁 Выкл. репосты", callback_data="content_share")],
+        [InlineKeyboardButton(text="➡️ Далее", callback_data="content_done")],
+    ])
+    await m.answer(
+        "Шаг 13д — Настройки контента:\n(нажми чтобы выключить, потом Далее)",
+        reply_markup=keyboard
+    )
+    await state.update_data(comment_disabled=False, download_disabled=False, share_disabled=False)
+    await state.set_state(CampaignStates.content_settings)
+
+
+@dp.callback_query(F.data.startswith("content_"))
+async def got_content_settings(callback: types.CallbackQuery, state: FSMContext):
+    action = callback.data.replace("content_", "")
+    data = await state.get_data()
+
+    if action == "done":
+        await state.set_state(CampaignStates.video_upload)
+        await callback.message.answer(
+            "Шаг 14/17 — Отправь видео файлом (не как медиа):",
+            reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="◀️ Назад")]], resize_keyboard=True)
+        )
+        await callback.answer()
+        return
+
+    key_map = {
+        "comments": "comment_disabled",
+        "download": "download_disabled",
+        "share": "share_disabled",
+    }
+    key = key_map.get(action)
+    if key:
+        current = data.get(key, False)
+        await state.update_data(**{key: not current})
+        data[key] = not current
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=f"{'✅' if data.get('comment_disabled') else '☐'} Выкл. комментарии",
+            callback_data="content_comments"
+        )],
+        [InlineKeyboardButton(
+            text=f"{'✅' if data.get('download_disabled') else '☐'} Выкл. скачивание",
+            callback_data="content_download"
+        )],
+        [InlineKeyboardButton(
+            text=f"{'✅' if data.get('share_disabled') else '☐'} Выкл. репосты",
+            callback_data="content_share"
+        )],
+        [InlineKeyboardButton(text="➡️ Далее", callback_data="content_done")],
+    ])
+    try:
+        await callback.message.edit_reply_markup(reply_markup=keyboard)
+    except Exception:
+        pass
     await callback.answer()
 
 
@@ -1313,6 +1493,12 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                 campaign_id = sp_camp_data["data"]["campaign_id"]
 
                 # Adgroup
+                targeting_spec = {"location_ids": [str(data["geo"])]}
+                if data.get("genders"):
+                    targeting_spec["genders"] = data["genders"]
+                if data.get("age_groups"):
+                    targeting_spec["age_groups"] = data["age_groups"]
+
                 sp_adgroup_payload = {
                     "advertiser_id": advertiser_id,
                     "campaign_id": campaign_id,
@@ -1325,19 +1511,27 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                     "schedule_start_time": data["schedule_start"],
                     "placement_type": "PLACEMENT_TYPE_NORMAL",
                     "placements": ["PLACEMENT_TIKTOK"],
-                    "targeting_spec": {"location_ids": [str(data["geo"])]},
+                    "targeting_spec": targeting_spec,
                     "request_id": str(int(time.time() * 1000)),
                 }
                 if data.get("bid_amount") and data.get("bid_type") == "BID_TYPE_CUSTOM":
                     sp_adgroup_payload["bid_price"] = float(data["bid_amount"])
                 if data.get("schedule_end"):
                     sp_adgroup_payload["schedule_end_time"] = data["schedule_end"]
+                if data.get("comment_disabled"):
+                    sp_adgroup_payload["comment_disabled"] = True
+                if data.get("download_disabled"):
+                    sp_adgroup_payload["video_download_disabled"] = True
+                if data.get("share_disabled"):
+                    sp_adgroup_payload["share_disabled"] = True
                 # Проверяем что пиксель существует в этом кабинете
                 if data.get("pixel_id"):
                     pixels = await search_pixels(advertiser_id, "")
                     pixel_ids = [p["pixel_id"] for p in pixels]
                     if data["pixel_id"] in pixel_ids:
                         sp_adgroup_payload["pixel_id"] = data["pixel_id"]
+                        if data.get("optimization_event"):
+                            sp_adgroup_payload["optimization_event"] = data["optimization_event"]
 
                 sp_adgroup_resp = await session.post(f"{base_url}/smart_plus/adgroup/create/", json=sp_adgroup_payload, headers=headers)
                 sp_adgroup_data = await sp_adgroup_resp.json()
