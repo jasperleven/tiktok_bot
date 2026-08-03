@@ -1176,16 +1176,16 @@ async def got_age(callback: types.CallbackQuery, state: FSMContext):
 
 async def show_content_settings(m, state: FSMContext):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💬 Выкл. комментарии", callback_data="content_comments")],
-        [InlineKeyboardButton(text="📥 Выкл. скачивание", callback_data="content_download")],
-        [InlineKeyboardButton(text="🔁 Выкл. репосты", callback_data="content_share")],
+        [InlineKeyboardButton(text="✅ Выкл. комментарии", callback_data="content_comments")],
+        [InlineKeyboardButton(text="✅ Выкл. скачивание", callback_data="content_download")],
+        [InlineKeyboardButton(text="✅ Выкл. репосты", callback_data="content_share")],
         [InlineKeyboardButton(text="➡️ Далее", callback_data="content_done")],
     ])
     await m.answer(
-        "Шаг 13д — Настройки контента:\n(нажми чтобы выключить, потом Далее)",
+        "Шаг 13д — Настройки контента:\n(по умолчанию всё выключено; нажми чтобы включить обратно, потом Далее)",
         reply_markup=keyboard
     )
-    await state.update_data(comment_disabled=False, download_disabled=False, share_disabled=False)
+    await state.update_data(comment_disabled=True, download_disabled=True, share_disabled=True)
     await state.set_state(CampaignStates.content_settings)
 
 
