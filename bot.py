@@ -937,21 +937,18 @@ async def got_schedule_end(message: types.Message, state: FSMContext):
     end = None if message.text == "♾ Без даты окончания" else message.text
     await state.update_data(schedule_end=end)
     data = await state.get_data()
-    if data.get("objective") == "LEAD_GENERATION":
-        # Smart+ не поддерживает ручную ставку
-        await state.update_data(bid_type="BID_TYPE_NO_BID", bid_amount=None)
-        await show_pixel_list(message, state)
-    else:
-        await state.set_state(CampaignStates.bid_type)
-        keyboard = ReplyKeyboardMarkup(
-            keyboard=[
-                [KeyboardButton(text="🤖 Автоставка")],
-                [KeyboardButton(text="✍️ Ручная ставка")],
-                [KeyboardButton(text="◀️ Назад")],
-            ],
-            resize_keyboard=True, one_time_keyboard=True
-        )
-        await message.answer("Шаг 12/17 — Ставка:", reply_markup=keyboard)
+    # BID_TYPE_CUSTOM валиден для Smart+ adgroup по официальной схеме API (SmartBidType),
+    # поэтому шаг выбора ставки теперь одинаковый для всех целей, включая LEAD_GENERATION
+    await state.set_state(CampaignStates.bid_type)
+    keyboard = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="🤖 Автоставка")],
+            [KeyboardButton(text="✍️ Ручная ставка")],
+            [KeyboardButton(text="◀️ Назад")],
+        ],
+        resize_keyboard=True, one_time_keyboard=True
+    )
+    await message.answer("Шаг 12/17 — Ставка:", reply_markup=keyboard)
 
 
 async def show_pixel_list(message_or_callback, state: FSMContext):
@@ -1478,13 +1475,18 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                     return False, "Не найден TikTok аккаунт для кабинета"
 
                 # Кампания
+                budget_optimize_on = data.get("budget_optimize_on", True)
                 sp_camp_payload = {
                     "advertiser_id": advertiser_id,
                     "campaign_name": data["campaign_name"],
                     "objective_type": "LEAD_GENERATION",
-                    "budget": data["budget"],
+                    "budget_optimize_on": budget_optimize_on,
                     "request_id": str(int(time.time() * 1000)),
                 }
+                if budget_optimize_on:
+                    # Бюджет на кампанию (CBO) — выбрано на шаге 4
+                    sp_camp_payload["budget"] = data["budget"]
+                    sp_camp_payload["budget_mode"] = data.get("budget_mode", "BUDGET_MODE_DAY")
                 sp_camp_resp = await session.post(f"{base_url}/smart_plus/campaign/create/", json=sp_camp_payload, headers=headers)
                 sp_camp_data = await sp_camp_resp.json()
                 await log_api("SMART+ CAMPAIGN CREATE", sp_camp_payload, sp_camp_data)
@@ -1495,9 +1497,13 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                 # Adgroup
                 targeting_spec = {"location_ids": [str(data["geo"])]}
                 if data.get("genders"):
-                    targeting_spec["genders"] = data["genders"]
+                    # Схема API: поле называется "gender" (строка), а не "genders" (список)
+                    targeting_spec["gender"] = data["genders"][0]
                 if data.get("age_groups"):
                     targeting_spec["age_groups"] = data["age_groups"]
+
+                # Если выбраны конкретный пол/возраст — включаем ручной таргетинг (SpcTargetingSwitch)
+                targeting_optimization_mode = "MANUAL" if (data.get("genders") or data.get("age_groups")) else "AUTOMATIC"
 
                 sp_adgroup_payload = {
                     "advertiser_id": advertiser_id,
@@ -1509,11 +1515,16 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                     "billing_event": "OCPM",
                     "schedule_type": "SCHEDULE_START_END" if data.get("schedule_end") else "SCHEDULE_FROM_NOW",
                     "schedule_start_time": data["schedule_start"],
-                    "placement_type": "PLACEMENT_TYPE_NORMAL",
-                    "placements": ["PLACEMENT_TIKTOK"],
+                    "placement_type": data.get("placement_type", "PLACEMENT_TYPE_NORMAL"),
+                    "placements": data.get("placements", ["PLACEMENT_TIKTOK"]),
+                    "targeting_optimization_mode": targeting_optimization_mode,
                     "targeting_spec": targeting_spec,
                     "request_id": str(int(time.time() * 1000)),
                 }
+                if not budget_optimize_on:
+                    # Бюджет на группу объявлений — выбрано на шаге 4
+                    sp_adgroup_payload["budget"] = data["budget"]
+                    sp_adgroup_payload["budget_mode"] = data.get("budget_mode", "BUDGET_MODE_DAY")
                 if data.get("bid_amount") and data.get("bid_type") == "BID_TYPE_CUSTOM":
                     sp_adgroup_payload["bid_price"] = float(data["bid_amount"])
                 if data.get("schedule_end"):
