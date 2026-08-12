@@ -26,10 +26,13 @@ TIKTOK_CLIENT_KEY = os.getenv("TIKTOK_CLIENT_KEY")
 TIKTOK_CLIENT_SECRET = os.getenv("TIKTOK_CLIENT_SECRET")
 TIKTOK_REDIRECT_URI = os.getenv("TIKTOK_REDIRECT_URI")
 MARKETING_TOKEN = os.getenv("TIKTOK_MARKETING_TOKEN")
+MARKETING_TOKEN_NASTYA = os.getenv("TIKTOK_MARKETING_TOKEN_NASTYA")
 
 ACCOUNTS_FILE = "accounts.json"
 
-ADVERTISERS = {
+BC_ACCOUNTS_FILE = "bc_selection.json"
+
+BC_VLAD = {
     "7379547391218696193": "AM_2_dverirb.online",
     "7380323349555413008": "#245 TikTok Boost Ads I Vlad RB",
     "7390291557712298001": "AM_2_Стиралки/холодильники",
@@ -74,6 +77,142 @@ ADVERTISERS = {
     "7652299641001787412": "WGC-M-S-cool-shop-14",
     "7652299857702961172": "WGC-M-S-cool-shop-15",
 }
+
+BC_NASTYA = {
+    "7306165613997719553": "#129 TikTok Boost Ads | Moon 3 | NewYear_shop | RB",
+    "7311994827049304065": "#129 TikTok Boost Ads | Moon 3 | Auto_shop | RB",
+    "7324244496630185986": "nastya3tt0115",
+    "7415557383197605905": "AM_2_technowave-ad1",
+    "7416274523366473729": "AM_2_technowave-ad3",
+    "7416323525604278288": "AM_2_technowave.ad2",
+    "7432252293791285264": "WGC-M-S-3_technowave-ad5",
+    "7433361755880833041": "AM_3_technowave-ad6",
+    "7433362698240737281": "AM_3_technowave-ad7",
+    "7433363933391536129": "AM_3_technowave-ad8",
+    "7440088330659971089": "ICNT-M-S-fonarik.premiershop",
+    "7441163654311165969": "AM_3_technowave-ad10",
+    "7447815828566949889": "AM_3_technowave-ad11",
+    "7447817204621672449": "AM_3_technowave-ad12",
+    "7447818069004550160": "AM_3_technowave-ad13",
+    "7450466365070540817": "AM_3_technowave-ad14",
+    "7450467761588813825": "WGC-M-S-3_technowave-ad15",
+    "7450468740065558545": "AM_3_technowave-ad16",
+    "7450473074291539984": "AM_3_technowave-ad17",
+    "7465228707943432193": "WCG-M-S-AM_3_technowave-ad18",
+    "7469745739883724801": "AM_3_technowave-ad19",
+    "7469783726277525520": "AM_3_technowave-ad20",
+    "7469784472406441985": "AM_3_technowave-ad21",
+    "7470066457113083905": "AM_3_technowave-ad22",
+    "7470067477721186305": "AM_3_technowave-ad23",
+    "7470138988892930064": "AM_3_technowave-ad24",
+    "7470139405119029265": "AM_3_technowave-ad25",
+    "7470139855113191441": "AM_3_technowave-ad26",
+    "7470826615312908304": "AM_3_technowave-ad27",
+    "7470826999469228048": "AM_3_technowave-ad28",
+    "7470827659698831376": "AM_3_technowave-ad29",
+    "7470828304057303041": "AM_3_technowave-ad30",
+    "7470828758069706753": "AM_3_technowave-ad31",
+    "7472357606451986433": "AM_3_technowave-ad32",
+    "7472357998162149377": "WGC-M-S-AM_3_technowave-ad33",
+    "7472358512170057744": "WGC-M-S-3_technowave-ad34",
+    "7473512399736258561": "AM_3_technowave-ad35",
+    "7473512801441742849": "AM_3_technowave-ad36",
+    "7476005501638361105": "AM_3_technowave-ad38",
+    "7476005927771095041": "AM_3_technowave-ad39",
+    "7476006284379455505": "AM_3_technowave-ad40",
+    "7476006688189906945": "WGC-M-S-3_technowave-ad41",
+    "7476007077392121872": "WGC-M-S-AM_3_technowave-ad42",
+    "7476007478585704464": "WGC-M-S-AM_3_technowave-ad43",
+    "7481289248986087441": "WGC-M-S-mega-techno.of",
+    "7481289722506035217": "WGC-M-S-mega-techno-2",
+    "7481289983878578177": "WGC-M-S-mega-techno-3",
+    "7481290231111532551": "WGC-M-S-online-techno-5",
+    "7496485841385226258": "WGC-M-S-online-sale-shop",
+    "7496485841385324562": "WGC-M-S-onlinesale-shop",
+    "7496486904636997650": "WGC-M-S-online-sale-shopxyz",
+    "7496487210787717138": "WGC-M-S-online-saletech",
+    "7496487662103330817": "WGC-M-S-online-salshop",
+    "7496487834862436369": "WGC-M-S-online-salestore",
+    "7504972169060073473": "WGC-M-S-cool-by-shoponline",
+    "7504973275993145345": "WGC-M-S-cool-by-shopsitee",
+    "7504973827882713105": "WGC-M-S-cool-by-shopstoree",
+    "7505007920823107591": "WGC-M-S-cool-by-shop-xyz",
+    "7505007952001253377": "WGC-M-S-cool-by-shoptechh",
+    "7505009554032345096": "WGC-M-S-cool-shop-by-online",
+    "7505018752841531400": "WGC-M-S-cool-shop-by-site",
+    "7505019054350237703": "WGC-M-S-cool-shop-by-store",
+    "7505019068343009288": "WGC-M-S-cool-shop-by",
+    "7505019162096779271": "WGC-M-S-cool-shop-tech",
+    "7505019854211465232": "WGC-M-S-cool-shop-xyz",
+    "7522058304790495249": "WGC-M-S-alfa-shopsite",
+    "7522059399364476946": "WGC-M-S-techno-shopxyz",
+    "7522061541119164424": "WGC-M-S-alfa-shopstore",
+    "7522061957734776833": "WGC-M-S-alfa-shoponline",
+    "7522063277921288200": "WGC-M-S-alfa-shopxyz",
+    "7525366473553002513": "WGC-M-S-technoshop-onlinestore",
+    "7525368248519507975": "WGC-M-S-techshop-onlineonline",
+    "7525369693801201671": "WGC-M-S-techshop-online-site",
+    "7525370413484867592": "WGC-M-S-techshop-online-tech",
+    "7525370857045114898": "WGC-M-S-techshop-onlinexyz",
+    "7529900142787657729": "ICNT-M-S-alfa-shop",
+    "7550728831636848641": "alfa-sh",
+    "7579185185478475777": "WGC-M-S-cool-shop",
+    "7579218772431552529": "WGC-M-S-coolshop",
+    "7579525383360692241": "WGC-M-S-alfa-shop",
+    "7584053049574637569": "WGC-M-S-online-sale-shop-2",
+    "7589566514328682512": "WGC-M-S-cool-shop-2",
+    "7594384691119734801": "WGC-M-S-dacha-shop.xyz2",
+    "7607744844282281985": "WGC-M-S-dacha-shop",
+    "7608919922311331856": "WGC-M-S-dacha",
+    "7610323536325902352": "WGC-M-S-dacha-shop-1",
+    "7610323651145269264": "WGC-M-S-dacha-shop-2",
+    "7610323791662776337": "WGC-M-S-dacha-shop-3",
+    "7610324072874049553": "WGC-M-S-dacha-shop-4",
+    "7626753711976742913": "WGC-M-S-cool-by-shop-1",
+    "7628935051379752978": "WGC-M-S-dacha-shop.xyz1",
+    "7632400068336500737": "TechnoWave",
+}
+
+BC_ACCOUNTS = {
+    "Влад": BC_VLAD,
+    "Настя": BC_NASTYA,
+}
+
+ALL_ADVERTISERS = {**BC_VLAD, **BC_NASTYA}
+
+
+def load_bc_selection():
+    if os.path.exists(BC_ACCOUNTS_FILE):
+        with open(BC_ACCOUNTS_FILE, "r") as f:
+            return json.load(f)
+    return {}
+
+
+def save_bc_selection(sel):
+    with open(BC_ACCOUNTS_FILE, "w") as f:
+        json.dump(sel, f)
+
+
+def get_user_bc(user_id) -> str:
+    sel = load_bc_selection()
+    return sel.get(str(user_id), "Влад")
+
+
+def set_user_bc(user_id, bc_name):
+    sel = load_bc_selection()
+    sel[str(user_id)] = bc_name
+    save_bc_selection(sel)
+
+
+def get_user_advertisers(user_id) -> dict:
+    return BC_ACCOUNTS.get(get_user_bc(user_id), BC_VLAD)
+
+
+def get_token_for_advertiser(advertiser_id: str) -> str:
+    """Возвращает нужный access token в зависимости от того, какому БЦ принадлежит кабинет."""
+    if str(advertiser_id) in BC_NASTYA:
+        return MARKETING_TOKEN_NASTYA
+    return MARKETING_TOKEN
 
 OBJECTIVES = {
     "🎯 Охват": "REACH",
@@ -176,7 +315,7 @@ async def search_pixels(advertiser_id, query):
             resp = await session.get(
                 "https://business-api.tiktok.com/open_api/v1.3/pixel/list/",
                 params={"advertiser_id": advertiser_id, "page_size": 20},
-                headers={"Access-Token": MARKETING_TOKEN}
+                headers={"Access-Token": get_token_for_advertiser(advertiser_id)}
             )
             data = await resp.json()
             if data.get("code") != 0:
@@ -289,9 +428,9 @@ async def publish_video_to_tiktok(identity, video_path, title, session, base_url
 
 # ─── Клавиатуры ──────────────────────────────────────────────────────────────
 
-def build_advertisers_keyboard(selected):
+def build_advertisers_keyboard(selected, advertisers):
     rows = []
-    for adv_id, name in ADVERTISERS.items():
+    for adv_id, name in advertisers.items():
         mark = "✅" if adv_id in selected else "☐"
         rows.append([InlineKeyboardButton(text=f"{mark} {name}", callback_data=f"adv_{adv_id}")])
     rows.append([
@@ -302,9 +441,9 @@ def build_advertisers_keyboard(selected):
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def build_confirm_keyboard(selected):
+def build_confirm_keyboard(selected, advertisers):
     rows = []
-    for adv_id, name in ADVERTISERS.items():
+    for adv_id, name in advertisers.items():
         mark = "✅" if adv_id in selected else "☐"
         rows.append([InlineKeyboardButton(text=f"{mark} {name}", callback_data=f"adv_{adv_id}")])
     rows.append([
@@ -373,14 +512,50 @@ async def exchange_code(code, telegram_user_id):
 
 # ─── Команды ─────────────────────────────────────────────────────────────────
 
+def build_bc_keyboard(current_bc: str = None):
+    rows = []
+    for bc_name in BC_ACCOUNTS.keys():
+        mark = "✅ " if bc_name == current_bc else ""
+        rows.append([InlineKeyboardButton(text=f"{mark}{bc_name}", callback_data=f"bc_{bc_name}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     await message.answer(
-        "👋 TikTok Ads Manager Bot\n\n"
+        "👋 TikTok Ads Manager Bot\n\nВыбери бизнес-центр (БЦ), с которым будешь работать:",
+        reply_markup=build_bc_keyboard(get_user_bc(message.from_user.id))
+    )
+
+
+@dp.message(Command("selectbc"))
+async def cmd_select_bc(message: types.Message):
+    await message.answer(
+        f"Текущий БЦ: {get_user_bc(message.from_user.id)}\nВыбери БЦ:",
+        reply_markup=build_bc_keyboard(get_user_bc(message.from_user.id))
+    )
+
+
+@dp.callback_query(F.data.startswith("bc_"))
+async def got_bc_selection(callback: types.CallbackQuery):
+    bc_name = callback.data.replace("bc_", "")
+    if bc_name not in BC_ACCOUNTS:
+        await callback.answer()
+        return
+    set_user_bc(callback.from_user.id, bc_name)
+    n = len(BC_ACCOUNTS[bc_name])
+    try:
+        await callback.message.edit_reply_markup(reply_markup=build_bc_keyboard(bc_name))
+    except Exception:
+        pass
+    await callback.answer(f"Выбран БЦ: {bc_name}")
+    await callback.message.answer(
+        f"✅ БЦ «{bc_name}» выбран ({n} кабинетов)\n\n"
         "📢 Реклама:\n"
         "/newcampaign — создать рекламную кампанию\n"
         "/mycampaigns — просмотр и удаление кампаний\n"
-        "/deletecampaign — удалить кампанию по ID\n\n"
+        "/deletecampaign — удалить кампанию по ID\n"
+        "/selectbc — сменить БЦ\n\n"
         "📱 Постинг:\n"
         "/connect — подключить TikTok аккаунт\n"
         "/accounts — список аккаунтов\n"
@@ -406,7 +581,7 @@ async def cmd_delete_campaign(message: types.Message):
     campaign_id = args[2]
 
     async with aiohttp.ClientSession() as session:
-        headers = {"Access-Token": MARKETING_TOKEN, "Content-Type": "application/json"}
+        headers = {"Access-Token": get_token_for_advertiser(advertiser_id), "Content-Type": "application/json"}
         base_url = "https://business-api.tiktok.com/open_api/v1.3"
 
         # Пробуем удалить через Smart+ endpoint
@@ -444,11 +619,12 @@ class DeleteCampaignStates(StatesGroup):
 @dp.message(Command("mycampaigns"))
 async def cmd_mycampaigns(message: types.Message, state: FSMContext):
     await state.set_state(DeleteCampaignStates.select_advertiser)
+    advertisers = get_user_advertisers(message.from_user.id)
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=name, callback_data=f"deladv_{adv_id}")]
-        for adv_id, name in list(ADVERTISERS.items())[:20]
+        for adv_id, name in list(advertisers.items())[:20]
     ])
-    await message.answer("Выбери кабинет для просмотра кампаний:", reply_markup=keyboard)
+    await message.answer(f"БЦ: {get_user_bc(message.from_user.id)}\nВыбери кабинет для просмотра кампаний:", reply_markup=keyboard)
 
 
 @dp.callback_query(F.data.startswith("deladv_"))
@@ -457,7 +633,7 @@ async def got_delete_advertiser(callback: types.CallbackQuery, state: FSMContext
     await state.update_data(delete_adv_id=adv_id, delete_camp_ids=[])
 
     async with aiohttp.ClientSession() as session:
-        headers = {"Access-Token": MARKETING_TOKEN}
+        headers = {"Access-Token": get_token_for_advertiser(adv_id)}
         base_url = "https://business-api.tiktok.com/open_api/v1.3"
         r = await session.get(f"{base_url}/smart_plus/campaign/get/",
             params={"advertiser_id": adv_id, "page_size": 20}, headers=headers)
@@ -479,7 +655,7 @@ async def got_delete_advertiser(callback: types.CallbackQuery, state: FSMContext
     ] + [[InlineKeyboardButton(text="🗑 Удалить выбранные", callback_data="confirm_delete")]])
 
     await callback.message.answer(
-        f"Кампании в {ADVERTISERS.get(adv_id, adv_id)}:\nВыбери для удаления:",
+        f"Кампании в {ALL_ADVERTISERS.get(adv_id, adv_id)}:\nВыбери для удаления:",
         reply_markup=keyboard
     )
     await state.set_state(DeleteCampaignStates.select_campaigns)
@@ -545,7 +721,7 @@ async def do_delete_campaigns(callback: types.CallbackQuery, state: FSMContext):
     adv_id = data.get("delete_adv_id")
 
     async with aiohttp.ClientSession() as session:
-        headers = {"Access-Token": MARKETING_TOKEN, "Content-Type": "application/json"}
+        headers = {"Access-Token": get_token_for_advertiser(adv_id), "Content-Type": "application/json"}
         base_url = "https://business-api.tiktok.com/open_api/v1.3"
         r = await session.post(f"{base_url}/smart_plus/campaign/status/update/",
             headers=headers,
@@ -724,16 +900,17 @@ async def cmd_new_campaign(message: types.Message, state: FSMContext):
     await state.set_state(CampaignStates.select_advertisers)
     await state.update_data(selected_advertisers=[])
     await message.answer(
-        "📢 *Создание рекламной кампании*\n\nШаг 1/17 — Выбери рекламные кабинеты:",
+        f"📢 *Создание рекламной кампании*\n\nБЦ: {get_user_bc(message.from_user.id)}\nШаг 1/17 — Выбери рекламные кабинеты:",
         parse_mode="Markdown",
-        reply_markup=build_advertisers_keyboard([])
+        reply_markup=build_advertisers_keyboard([], get_user_advertisers(message.from_user.id))
     )
 
 
 @dp.callback_query(F.data.startswith("adv_") & ~F.data.in_({"adv_all", "adv_none"}))
 async def toggle_advertiser(callback: types.CallbackQuery, state: FSMContext):
     adv_id = callback.data.replace("adv_", "")
-    if adv_id not in ADVERTISERS:
+    advertisers = get_user_advertisers(callback.from_user.id)
+    if adv_id not in advertisers:
         await callback.answer()
         return
     data = await state.get_data()
@@ -746,9 +923,9 @@ async def toggle_advertiser(callback: types.CallbackQuery, state: FSMContext):
     try:
         current_state = await state.get_state()
         if current_state == CampaignStates.select_advertisers:
-            await callback.message.edit_reply_markup(reply_markup=build_advertisers_keyboard(selected))
+            await callback.message.edit_reply_markup(reply_markup=build_advertisers_keyboard(selected, advertisers))
         else:
-            await callback.message.edit_reply_markup(reply_markup=build_confirm_keyboard(selected))
+            await callback.message.edit_reply_markup(reply_markup=build_confirm_keyboard(selected, advertisers))
     except Exception:
         pass
     await callback.answer()
@@ -756,14 +933,15 @@ async def toggle_advertiser(callback: types.CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data == "adv_all")
 async def select_all_advertisers(callback: types.CallbackQuery, state: FSMContext):
-    selected = list(ADVERTISERS.keys())
+    advertisers = get_user_advertisers(callback.from_user.id)
+    selected = list(advertisers.keys())
     await state.update_data(selected_advertisers=selected)
     try:
         current_state = await state.get_state()
         if current_state == CampaignStates.select_advertisers:
-            await callback.message.edit_reply_markup(reply_markup=build_advertisers_keyboard(selected))
+            await callback.message.edit_reply_markup(reply_markup=build_advertisers_keyboard(selected, advertisers))
         else:
-            await callback.message.edit_reply_markup(reply_markup=build_confirm_keyboard(selected))
+            await callback.message.edit_reply_markup(reply_markup=build_confirm_keyboard(selected, advertisers))
     except Exception:
         pass
     await callback.answer(f"Выбрано {len(selected)} кабинетов")
@@ -771,13 +949,14 @@ async def select_all_advertisers(callback: types.CallbackQuery, state: FSMContex
 
 @dp.callback_query(F.data == "adv_none")
 async def deselect_all_advertisers(callback: types.CallbackQuery, state: FSMContext):
+    advertisers = get_user_advertisers(callback.from_user.id)
     await state.update_data(selected_advertisers=[])
     try:
         current_state = await state.get_state()
         if current_state == CampaignStates.select_advertisers:
-            await callback.message.edit_reply_markup(reply_markup=build_advertisers_keyboard([]))
+            await callback.message.edit_reply_markup(reply_markup=build_advertisers_keyboard([], advertisers))
         else:
-            await callback.message.edit_reply_markup(reply_markup=build_confirm_keyboard([]))
+            await callback.message.edit_reply_markup(reply_markup=build_confirm_keyboard([], advertisers))
     except Exception:
         pass
     await callback.answer("Все сняты")
@@ -963,7 +1142,7 @@ async def show_pixel_list(message_or_callback, state: FSMContext):
     text_lines = []
 
     for adv_id in selected:
-        name = ADVERTISERS.get(adv_id, adv_id)
+        name = ALL_ADVERTISERS.get(adv_id, adv_id)
         pixels = await search_pixels(adv_id, "")
         if pixels:
             text_lines.append(f"📋 {name}:")
@@ -1333,7 +1512,7 @@ async def got_ad_url(message: types.Message, state: FSMContext):
     await state.update_data(ad_url=message.text)
     data = await state.get_data()
     selected = data.get("selected_advertisers", [])
-    names = [ADVERTISERS.get(a, a) for a in selected]
+    names = [ALL_ADVERTISERS.get(a, a) for a in selected]
     videos = data.get("videos", [])
     text = (
         f"Шаг 17/17 — Подтверждение\n\n"
@@ -1344,7 +1523,7 @@ async def got_ad_url(message: types.Message, state: FSMContext):
         f"📁 Кабинетов: {len(selected)}\n\n" +
         "\n".join(f"• {n}" for n in names)
     )
-    await message.answer(text, reply_markup=build_confirm_keyboard(selected))
+    await message.answer(text, reply_markup=build_confirm_keyboard(selected, get_user_advertisers(message.from_user.id)))
 
 
 @dp.callback_query(F.data == "create_campaign")
@@ -1371,7 +1550,7 @@ async def create_campaign(callback: types.CallbackQuery, state: FSMContext):
         return
 
     for adv_id in selected:
-        name = ADVERTISERS.get(adv_id, adv_id)
+        name = ALL_ADVERTISERS.get(adv_id, adv_id)
         success, msg = await create_tiktok_campaign(adv_id, data, video_path)
         status = "✅" if success else "❌"
         for _ in range(5):
@@ -1397,7 +1576,7 @@ async def create_campaign(callback: types.CallbackQuery, state: FSMContext):
 async def create_tiktok_campaign(advertiser_id, data, video_path):
     try:
         headers = {
-            "Access-Token": MARKETING_TOKEN,
+            "Access-Token": get_token_for_advertiser(advertiser_id),
             "Content-Type": "application/json"
         }
         base_url = "https://business-api.tiktok.com/open_api/v1.3"
@@ -1425,7 +1604,7 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
             upload_resp = await session.post(
                 f"{base_url}/file/video/ad/upload/",
                 data=form,
-                headers={"Access-Token": MARKETING_TOKEN}
+                headers={"Access-Token": get_token_for_advertiser(advertiser_id)}
             )
             upload_data = await upload_resp.json()
             await log_api("VIDEO UPLOAD", {"advertiser_id": advertiser_id}, upload_data)
@@ -1579,7 +1758,7 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                     vup_resp = await session.post(
                         f"{base_url}/file/video/ad/upload/",
                         data=vform,
-                        headers={"Access-Token": MARKETING_TOKEN}
+                        headers={"Access-Token": get_token_for_advertiser(advertiser_id)}
                     )
                     vup_data = await vup_resp.json()
                     if vup_data.get("code") != 0:
@@ -1741,7 +1920,8 @@ async def show_step(state, msg_or_cb, step_name):
     if step_name == "select_advertisers":
         selected = data.get("selected_advertisers", [])
         await state.set_state(CampaignStates.select_advertisers)
-        await m.answer("Шаг 1/17 — Выбери рекламные кабинеты:", reply_markup=build_advertisers_keyboard(selected))
+        user_id = msg_or_cb.from_user.id
+        await m.answer("Шаг 1/17 — Выбери рекламные кабинеты:", reply_markup=build_advertisers_keyboard(selected, get_user_advertisers(user_id)))
 
     elif step_name == "campaign_name":
         await state.set_state(CampaignStates.campaign_name)
