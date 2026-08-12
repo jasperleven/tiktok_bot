@@ -208,6 +208,11 @@ def get_user_advertisers(user_id) -> dict:
     return BC_ACCOUNTS.get(get_user_bc(user_id), BC_VLAD)
 
 
+def user_has_selected_bc(user_id) -> bool:
+    sel = load_bc_selection()
+    return str(user_id) in sel
+
+
 def get_token_for_advertiser(advertiser_id: str) -> str:
     """Возвращает нужный access token в зависимости от того, какому БЦ принадлежит кабинет."""
     if str(advertiser_id) in BC_NASTYA:
@@ -537,7 +542,7 @@ async def cmd_select_bc(message: types.Message):
 
 
 @dp.callback_query(F.data.startswith("bc_"))
-async def got_bc_selection(callback: types.CallbackQuery):
+async def got_bc_selection(callback: types.CallbackQuery, state: FSMContext):
     bc_name = callback.data.replace("bc_", "")
     if bc_name not in BC_ACCOUNTS:
         await callback.answer()
@@ -549,20 +554,31 @@ async def got_bc_selection(callback: types.CallbackQuery):
     except Exception:
         pass
     await callback.answer(f"Выбран БЦ: {bc_name}")
-    await callback.message.answer(
-        f"✅ БЦ «{bc_name}» выбран ({n} кабинетов)\n\n"
-        "📢 Реклама:\n"
-        "/newcampaign — создать рекламную кампанию\n"
-        "/mycampaigns — просмотр и удаление кампаний\n"
-        "/deletecampaign — удалить кампанию по ID\n"
-        "/selectbc — сменить БЦ\n\n"
-        "📱 Постинг:\n"
-        "/connect — подключить TikTok аккаунт\n"
-        "/accounts — список аккаунтов\n"
-        "/post — опубликовать видео\n\n"
-        "/restart — сбросить текущее состояние",
-        reply_markup=ReplyKeyboardRemove()
-    )
+
+    data = await state.get_data()
+    pending = data.get("pending_action")
+
+    if pending == "newcampaign":
+        await state.update_data(pending_action=None)
+        await start_new_campaign_flow(callback.message, state, callback.from_user.id)
+    elif pending == "mycampaigns":
+        await state.update_data(pending_action=None)
+        await start_mycampaigns_flow(callback.message, callback.from_user.id, state)
+    else:
+        await callback.message.answer(
+            f"✅ БЦ «{bc_name}» выбран ({n} кабинетов)\n\n"
+            "📢 Реклама:\n"
+            "/newcampaign — создать рекламную кампанию\n"
+            "/mycampaigns — просмотр и удаление кампаний\n"
+            "/deletecampaign — удалить кампанию по ID\n"
+            "/selectbc — сменить БЦ\n\n"
+            "📱 Постинг:\n"
+            "/connect — подключить TikTok аккаунт\n"
+            "/accounts — список аккаунтов\n"
+            "/post — опубликовать видео\n\n"
+            "/restart — сбросить текущее состояние",
+            reply_markup=ReplyKeyboardRemove()
+        )
 
 
 @dp.message(Command("deletecampaign"))
@@ -618,13 +634,24 @@ class DeleteCampaignStates(StatesGroup):
 
 @dp.message(Command("mycampaigns"))
 async def cmd_mycampaigns(message: types.Message, state: FSMContext):
+    if not user_has_selected_bc(message.from_user.id):
+        await state.update_data(pending_action="mycampaigns")
+        await message.answer(
+            "Сначала выбери бизнес-центр (БЦ):",
+            reply_markup=build_bc_keyboard(get_user_bc(message.from_user.id))
+        )
+        return
+    await start_mycampaigns_flow(message, message.from_user.id, state)
+
+
+async def start_mycampaigns_flow(m, user_id, state: FSMContext):
     await state.set_state(DeleteCampaignStates.select_advertiser)
-    advertisers = get_user_advertisers(message.from_user.id)
+    advertisers = get_user_advertisers(user_id)
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=name, callback_data=f"deladv_{adv_id}")]
         for adv_id, name in list(advertisers.items())[:20]
     ])
-    await message.answer(f"БЦ: {get_user_bc(message.from_user.id)}\nВыбери кабинет для просмотра кампаний:", reply_markup=keyboard)
+    await m.answer(f"БЦ: {get_user_bc(user_id)}\nВыбери кабинет для просмотра кампаний:", reply_markup=keyboard)
 
 
 @dp.callback_query(F.data.startswith("deladv_"))
@@ -897,12 +924,23 @@ async def post_to_tiktok(access_token, file_id, title):
 
 @dp.message(Command("newcampaign"))
 async def cmd_new_campaign(message: types.Message, state: FSMContext):
+    if not user_has_selected_bc(message.from_user.id):
+        await state.update_data(pending_action="newcampaign")
+        await message.answer(
+            "Сначала выбери бизнес-центр (БЦ):",
+            reply_markup=build_bc_keyboard(get_user_bc(message.from_user.id))
+        )
+        return
+    await start_new_campaign_flow(message, state, message.from_user.id)
+
+
+async def start_new_campaign_flow(m, state: FSMContext, user_id):
     await state.set_state(CampaignStates.select_advertisers)
     await state.update_data(selected_advertisers=[])
-    await message.answer(
-        f"📢 *Создание рекламной кампании*\n\nБЦ: {get_user_bc(message.from_user.id)}\nШаг 1/17 — Выбери рекламные кабинеты:",
+    await m.answer(
+        f"📢 *Создание рекламной кампании*\n\nБЦ: {get_user_bc(user_id)}\nШаг 1/17 — Выбери рекламные кабинеты:",
         parse_mode="Markdown",
-        reply_markup=build_advertisers_keyboard([], get_user_advertisers(message.from_user.id))
+        reply_markup=build_advertisers_keyboard([], get_user_advertisers(user_id))
     )
 
 
