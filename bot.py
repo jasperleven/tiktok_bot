@@ -634,14 +634,11 @@ class DeleteCampaignStates(StatesGroup):
 
 @dp.message(Command("mycampaigns"))
 async def cmd_mycampaigns(message: types.Message, state: FSMContext):
-    if not user_has_selected_bc(message.from_user.id):
-        await state.update_data(pending_action="mycampaigns")
-        await message.answer(
-            "Сначала выбери бизнес-центр (БЦ):",
-            reply_markup=build_bc_keyboard(get_user_bc(message.from_user.id))
-        )
-        return
-    await start_mycampaigns_flow(message, message.from_user.id, state)
+    await state.update_data(pending_action="mycampaigns")
+    await message.answer(
+        "Выбери бизнес-центр (БЦ):",
+        reply_markup=build_bc_keyboard(get_user_bc(message.from_user.id))
+    )
 
 
 async def start_mycampaigns_flow(m, user_id, state: FSMContext):
@@ -924,14 +921,11 @@ async def post_to_tiktok(access_token, file_id, title):
 
 @dp.message(Command("newcampaign"))
 async def cmd_new_campaign(message: types.Message, state: FSMContext):
-    if not user_has_selected_bc(message.from_user.id):
-        await state.update_data(pending_action="newcampaign")
-        await message.answer(
-            "Сначала выбери бизнес-центр (БЦ):",
-            reply_markup=build_bc_keyboard(get_user_bc(message.from_user.id))
-        )
-        return
-    await start_new_campaign_flow(message, state, message.from_user.id)
+    await state.update_data(pending_action="newcampaign")
+    await message.answer(
+        "Шаг 0/17 — Выбери бизнес-центр (БЦ):",
+        reply_markup=build_bc_keyboard(get_user_bc(message.from_user.id))
+    )
 
 
 async def start_new_campaign_flow(m, state: FSMContext, user_id):
