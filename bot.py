@@ -79,47 +79,10 @@ BC_VLAD = {
 }
 
 BC_NASTYA = {
-    "7306165613997719553": "#129 TikTok Boost Ads | Moon 3 | NewYear_shop | RB",
-    "7311994827049304065": "#129 TikTok Boost Ads | Moon 3 | Auto_shop | RB",
-    "7324244496630185986": "nastya3tt0115",
-    "7415557383197605905": "AM_2_technowave-ad1",
-    "7416274523366473729": "AM_2_technowave-ad3",
-    "7416323525604278288": "AM_2_technowave.ad2",
     "7432252293791285264": "WGC-M-S-3_technowave-ad5",
-    "7433361755880833041": "AM_3_technowave-ad6",
-    "7433362698240737281": "AM_3_technowave-ad7",
-    "7433363933391536129": "AM_3_technowave-ad8",
-    "7440088330659971089": "ICNT-M-S-fonarik.premiershop",
-    "7441163654311165969": "AM_3_technowave-ad10",
-    "7447815828566949889": "AM_3_technowave-ad11",
-    "7447817204621672449": "AM_3_technowave-ad12",
-    "7447818069004550160": "AM_3_technowave-ad13",
-    "7450466365070540817": "AM_3_technowave-ad14",
     "7450467761588813825": "WGC-M-S-3_technowave-ad15",
-    "7450468740065558545": "AM_3_technowave-ad16",
-    "7450473074291539984": "AM_3_technowave-ad17",
-    "7465228707943432193": "WCG-M-S-AM_3_technowave-ad18",
-    "7469745739883724801": "AM_3_technowave-ad19",
-    "7469783726277525520": "AM_3_technowave-ad20",
-    "7469784472406441985": "AM_3_technowave-ad21",
-    "7470066457113083905": "AM_3_technowave-ad22",
-    "7470067477721186305": "AM_3_technowave-ad23",
-    "7470138988892930064": "AM_3_technowave-ad24",
-    "7470139405119029265": "AM_3_technowave-ad25",
-    "7470139855113191441": "AM_3_technowave-ad26",
-    "7470826615312908304": "AM_3_technowave-ad27",
-    "7470826999469228048": "AM_3_technowave-ad28",
-    "7470827659698831376": "AM_3_technowave-ad29",
-    "7470828304057303041": "AM_3_technowave-ad30",
-    "7470828758069706753": "AM_3_technowave-ad31",
-    "7472357606451986433": "AM_3_technowave-ad32",
     "7472357998162149377": "WGC-M-S-AM_3_technowave-ad33",
     "7472358512170057744": "WGC-M-S-3_technowave-ad34",
-    "7473512399736258561": "AM_3_technowave-ad35",
-    "7473512801441742849": "AM_3_technowave-ad36",
-    "7476005501638361105": "AM_3_technowave-ad38",
-    "7476005927771095041": "AM_3_technowave-ad39",
-    "7476006284379455505": "AM_3_technowave-ad40",
     "7476006688189906945": "WGC-M-S-3_technowave-ad41",
     "7476007077392121872": "WGC-M-S-AM_3_technowave-ad42",
     "7476007478585704464": "WGC-M-S-AM_3_technowave-ad43",
@@ -154,8 +117,6 @@ BC_NASTYA = {
     "7525369693801201671": "WGC-M-S-techshop-online-site",
     "7525370413484867592": "WGC-M-S-techshop-online-tech",
     "7525370857045114898": "WGC-M-S-techshop-onlinexyz",
-    "7529900142787657729": "ICNT-M-S-alfa-shop",
-    "7550728831636848641": "alfa-sh",
     "7579185185478475777": "WGC-M-S-cool-shop",
     "7579218772431552529": "WGC-M-S-coolshop",
     "7579525383360692241": "WGC-M-S-alfa-shop",
@@ -170,7 +131,6 @@ BC_NASTYA = {
     "7610324072874049553": "WGC-M-S-dacha-shop-4",
     "7626753711976742913": "WGC-M-S-cool-by-shop-1",
     "7628935051379752978": "WGC-M-S-dacha-shop.xyz1",
-    "7632400068336500737": "TechnoWave",
 }
 
 BC_ACCOUNTS = {
@@ -1178,7 +1138,7 @@ async def show_pixel_list(message_or_callback, state: FSMContext):
         pixels = await search_pixels(adv_id, "")
         if pixels:
             text_lines.append(f"📋 {name}:")
-            for p in pixels[:5]:
+            for p in pixels[:30]:
                 pid = p["pixel_id"]
                 pname = p.get("name") or pid
                 text_lines.append(f"  • {pname}")
@@ -1203,7 +1163,7 @@ async def show_pixel_list(message_or_callback, state: FSMContext):
             text=info["name"],
             callback_data=f"pixel_{pid}"
         )]
-        for pid, info in list(all_pixels.items())[:15]
+        for pid, info in list(all_pixels.items())[:40]
     ] + [
         [InlineKeyboardButton(text="◀️ Назад", callback_data="back_to_bid")],
         [InlineKeyboardButton(text="⏭ Пропустить", callback_data="pixel_skip")]
@@ -1327,7 +1287,7 @@ async def show_age_step(m, state: FSMContext):
          InlineKeyboardButton(text="25-34", callback_data="age_AGE_25_34")],
         [InlineKeyboardButton(text="35-44", callback_data="age_AGE_35_44"),
          InlineKeyboardButton(text="45-54", callback_data="age_AGE_45_54")],
-        [InlineKeyboardButton(text="55+", callback_data="age_AGE_55_UP")],
+        [InlineKeyboardButton(text="55+", callback_data="age_AGE_55_100")],
         [InlineKeyboardButton(text="➡️ Далее", callback_data="age_done")],
     ])
     await m.answer("Шаг 13г — Возраст (можно несколько):", reply_markup=keyboard)
@@ -1341,7 +1301,7 @@ async def got_age(callback: types.CallbackQuery, state: FSMContext):
     ages = data.get("age_groups", [])
 
     if action == "all":
-        ages = ["AGE_18_24", "AGE_25_34", "AGE_35_44", "AGE_45_54", "AGE_55_UP"]
+        ages = ["AGE_18_24", "AGE_25_34", "AGE_35_44", "AGE_45_54", "AGE_55_100"]
         await state.update_data(age_groups=ages)
         await callback.answer(f"Выбраны все возрасты")
     elif action == "done":
@@ -1360,9 +1320,9 @@ async def got_age(callback: types.CallbackQuery, state: FSMContext):
         await callback.answer(f"Выбрано: {len(ages)}")
 
     # Обновляем клавиатуру
-    all_ages = ["AGE_18_24", "AGE_25_34", "AGE_35_44", "AGE_45_54", "AGE_55_UP"]
+    all_ages = ["AGE_18_24", "AGE_25_34", "AGE_35_44", "AGE_45_54", "AGE_55_100"]
     labels = {"AGE_18_24": "18-24", "AGE_25_34": "25-34", "AGE_35_44": "35-44",
-              "AGE_45_54": "45-54", "AGE_55_UP": "55+"}
+              "AGE_45_54": "45-54", "AGE_55_100": "55+"}
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✅ Выбрать все", callback_data="age_all")],
         [InlineKeyboardButton(
@@ -1374,8 +1334,8 @@ async def got_age(callback: types.CallbackQuery, state: FSMContext):
             callback_data=f"age_{a}"
         ) for a in all_ages[2:4]],
         [InlineKeyboardButton(
-            text=f"{'✅' if 'AGE_55_UP' in ages else '☐'} 55+",
-            callback_data="age_AGE_55_UP"
+            text=f"{'✅' if 'AGE_55_100' in ages else '☐'} 55+",
+            callback_data="age_AGE_55_100"
         )],
         [InlineKeyboardButton(text=f"➡️ Далее ({len(ages)} выбрано)", callback_data="age_done")],
     ])
@@ -1764,6 +1724,15 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                 sp_adgroup_data = await sp_adgroup_resp.json()
                 await log_api("SMART+ ADGROUP CREATE", sp_adgroup_payload, sp_adgroup_data)
                 if sp_adgroup_data.get("code") != 0:
+                    # Группа не создалась — удаляем пустую кампанию, чтобы не копился мусор
+                    try:
+                        await session.post(
+                            f"{base_url}/smart_plus/campaign/status/update/",
+                            json={"advertiser_id": advertiser_id, "campaign_ids": [campaign_id], "operation_status": "DELETE"},
+                            headers=headers
+                        )
+                    except Exception:
+                        pass
                     return False, f"Ошибка группы: {sp_adgroup_data.get('message')}"
                 adgroup_id = sp_adgroup_data["data"]["adgroup_id"]
 
@@ -1906,6 +1875,14 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                 adgroup_data = await adgroup_resp.json()
                 await log_api("ADGROUP CREATE", adgroup_payload, adgroup_data)
                 if adgroup_data.get("code") != 0:
+                    try:
+                        await session.post(
+                            f"{base_url}/campaign/status/update/",
+                            json={"advertiser_id": advertiser_id, "campaign_ids": [campaign_id], "operation_status": "DELETE"},
+                            headers=headers
+                        )
+                    except Exception:
+                        pass
                     return False, f"Ошибка группы: {adgroup_data.get('message')}"
                 adgroup_id = adgroup_data["data"]["adgroup_id"]
 
