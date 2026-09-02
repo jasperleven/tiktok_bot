@@ -1231,7 +1231,8 @@ async def skip_pixel_callback(callback: types.CallbackQuery, state: FSMContext):
 
 async def show_pixel_event(m, state: FSMContext):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📋 Заполненная форма", callback_data="event_FORM")],
+        [InlineKeyboardButton(text="📋 Заполненная форма (в TikTok)", callback_data="event_FORM")],
+        [InlineKeyboardButton(text="🌐 Заявка на сайте", callback_data="event_ON_WEB_ORDER")],
         [InlineKeyboardButton(text="🛒 Покупка", callback_data="event_SHOPPING")],
         [InlineKeyboardButton(text="📝 Регистрация", callback_data="event_ON_WEB_REGISTER")],
         [InlineKeyboardButton(text="📞 Контакт", callback_data="event_CONSULT")],
@@ -1645,15 +1646,26 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                 if not identity:
                     return False, "Не найден TikTok аккаунт для кабинета"
 
+                # Если событие пикселя — "заявка на сайте" (внешняя форма на лендинге,
+                # не встроенная форма TikTok), Smart+ Lead Generation её не поддерживает:
+                # objective_type=LEAD_GENERATION + promotion_type=WEBSITE даёт ошибку API
+                # "There was an error with the Lead Generation advertising objective"
+                # (подтверждено тестовым запросом 2026-09-02). Правильная связка —
+                # objective_type=WEB_CONVERSIONS + sales_destination=WEBSITE на кампании,
+                # promotion_type=WEBSITE + optimization_goal=CONVERT на adgroup.
+                is_website_lead = data.get("optimization_event") == "ON_WEB_ORDER"
+
                 # Кампания
                 budget_optimize_on = data.get("budget_optimize_on", True)
                 sp_camp_payload = {
                     "advertiser_id": advertiser_id,
                     "campaign_name": data["campaign_name"],
-                    "objective_type": "LEAD_GENERATION",
+                    "objective_type": "WEB_CONVERSIONS" if is_website_lead else "LEAD_GENERATION",
                     "budget_optimize_on": budget_optimize_on,
                     "request_id": str(int(time.time() * 1000)),
                 }
+                if is_website_lead:
+                    sp_camp_payload["sales_destination"] = "WEBSITE"
                 if budget_optimize_on:
                     # Бюджет на кампанию (CBO) — выбрано на шаге 4
                     sp_camp_payload["budget"] = data["budget"]
@@ -1680,8 +1692,8 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                     "advertiser_id": advertiser_id,
                     "campaign_id": campaign_id,
                     "adgroup_name": data["adgroup_name"],
-                    "optimization_goal": "LEAD_GENERATION",
-                    "promotion_type": "LEAD_GENERATION",
+                    "optimization_goal": "CONVERT" if is_website_lead else "LEAD_GENERATION",
+                    "promotion_type": "WEBSITE" if is_website_lead else "LEAD_GENERATION",
                     "bid_type": data.get("bid_type", "BID_TYPE_NO_BID"),
                     "billing_event": "OCPM",
                     "schedule_type": "SCHEDULE_START_END" if data.get("schedule_end") else "SCHEDULE_FROM_NOW",
@@ -1705,6 +1717,8 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                     sp_adgroup_payload["conversion_bid_price"] = float(data["bid_amount"])
                 if data.get("schedule_end"):
                     sp_adgroup_payload["schedule_end_time"] = data["schedule_end"]
+                if is_website_lead and data.get("ad_url"):
+                    sp_adgroup_payload["landing_page_url"] = data["ad_url"]
                 if data.get("comment_disabled"):
                     sp_adgroup_payload["comment_disabled"] = True
                 if data.get("download_disabled"):
