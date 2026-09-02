@@ -301,6 +301,32 @@ async def search_pixels(advertiser_id, query):
         return []
 
 
+async def pixel_has_event(advertiser_id, pixel_id, optimization_event):
+    """Проверяет, настроено ли у конкретного пикселя данное событие (optimization_event).
+    Нужна, чтобы поймать несовместимость пиксель+событие ДО отправки заявки на создание
+    группы объявлений — иначе TikTok возвращает ошибку только на шаге adgroup/create/
+    ('This pixel event type does not exist'), когда уже поздно и обидно для пользователя."""
+    try:
+        async with aiohttp.ClientSession() as session:
+            resp = await session.get(
+                "https://business-api.tiktok.com/open_api/v1.3/pixel/list/",
+                params={"advertiser_id": advertiser_id, "page_size": 100},
+                headers={"Access-Token": get_token_for_advertiser(advertiser_id)}
+            )
+            data = await resp.json()
+            if data.get("code") != 0:
+                return True  # не смогли проверить — не блокируем, пусть решает сам API
+            for p in data.get("data", {}).get("pixels", []):
+                if str(p.get("pixel_id", "")) == str(pixel_id):
+                    for ev in p.get("events", []):
+                        if ev.get("optimization_event") == optimization_event and not ev.get("deprecated"):
+                            return True
+                    return False
+            return True
+    except Exception:
+        return True
+
+
 async def get_identity(advertiser_id, session, base_url, headers):
     try:
         resp = await session.get(
@@ -1248,6 +1274,18 @@ async def got_pixel_event(callback: types.CallbackQuery, state: FSMContext):
     if event == "skip":
         await state.update_data(optimization_event=None)
     else:
+        data = await state.get_data()
+        pixel_id = data.get("pixel_id")
+        check_advertiser_id = (data.get("selected_advertisers") or [None])[0]
+        if pixel_id and check_advertiser_id and not await pixel_has_event(check_advertiser_id, pixel_id, event):
+            await callback.message.answer(
+                f"⚠️ У выбранного пикселя не настроено событие «{event}». "
+                f"Выбери другое событие или другой пиксель (⏭ Назад к выбору пикселя нет — "
+                f"просто выбери /newcampaign заново с нужным пикселем)."
+            )
+            await show_pixel_event(callback.message, state)
+            await callback.answer()
+            return
         await state.update_data(optimization_event=event)
         await callback.message.answer(f"✅ Событие: {event}")
     await show_gender_step(callback.message, state)
@@ -1816,7 +1854,13 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                     }
                     if identity.get("identity_authorized_bc_id"):
                         ci["identity_authorized_bc_id"] = identity["identity_authorized_bc_id"]
-                    if identity.get("ads_only_mode"):
+                    # CUSTOMIZED_USER — это "псевдо-identity" (не настоящий связанный TikTok
+                    # аккаунт), а не BC_AUTH_TT; для него API требует dark_post_status=ON
+                    # ("Invalid param(s): ad_configuration.identity_id is required for
+                    # non-spark ad" иначе), даже когда ads_only_mode в /identity/get/ = null
+                    # (подтверждено тестом 2026-09-02: у всех CUSTOMIZED_USER identity
+                    # этого кабинета ads_only_mode: null).
+                    if identity.get("ads_only_mode") or identity.get("identity_type") == "CUSTOMIZED_USER":
                         ci["dark_post_status"] = "ON"
 
                     sp_ad_payload = {
