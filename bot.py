@@ -1685,12 +1685,20 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                     return False, "Не найден TikTok аккаунт для кабинета"
 
                 # Если событие пикселя — "заявка на сайте" (внешняя форма на лендинге,
-                # не встроенная форма TikTok), Smart+ Lead Generation её не поддерживает:
-                # objective_type=LEAD_GENERATION + promotion_type=WEBSITE даёт ошибку API
-                # "There was an error with the Lead Generation advertising objective"
-                # (подтверждено тестовым запросом 2026-09-02). Правильная связка —
-                # objective_type=WEB_CONVERSIONS + sales_destination=WEBSITE на кампании,
-                # promotion_type=WEBSITE + optimization_goal=CONVERT на adgroup.
+                # не встроенная форма TikTok): держим objective_type/promotion_type
+                # неизменными (LEAD_GENERATION/LEAD_GENERATION) — именно эта связка
+                # надёжно поддерживает создание видео-объявления через smart_plus/ad/create/
+                # на этом кабинете. Попытка сменить objective_type на WEB_CONVERSIONS
+                # (с sales_destination=WEBSITE) технически создаёт кампанию/adgroup, но
+                # TikTok на уровне creative_type требует товарный каталог (SHOP_PDP/SHOP_PLP)
+                # — обычное видео (SINGLE_VIDEO) отклоняется с ошибкой про CTA
+                # (подтверждено тестами 2026-09-02: business-api.tiktok.com отдаёт
+                # "creative_type... correct is SHOP_PDP, SHOP_PLP, ..." для не-каталожных
+                # видео на WEB_CONVERSIONS/TRAFFIC). У нас каталога нет и не будет (у товаров
+                # часто нет фиксированной цены на лендингах), поэтому остаёмся на
+                # LEAD_GENERATION — там Website как локация переключается по TikTok Ads
+                # Manager Help ("Lead Gen Campaign with Your Website") именно через выбор
+                # событие пикселя (не FORM), без смены promotion_type.
                 is_website_lead = data.get("optimization_event") == "ON_WEB_ORDER"
 
                 # Кампания
@@ -1698,12 +1706,10 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                 sp_camp_payload = {
                     "advertiser_id": advertiser_id,
                     "campaign_name": data["campaign_name"],
-                    "objective_type": "WEB_CONVERSIONS" if is_website_lead else "LEAD_GENERATION",
+                    "objective_type": "LEAD_GENERATION",
                     "budget_optimize_on": budget_optimize_on,
                     "request_id": str(int(time.time() * 1000)),
                 }
-                if is_website_lead:
-                    sp_camp_payload["sales_destination"] = "WEBSITE"
                 if budget_optimize_on:
                     # Бюджет на кампанию (CBO) — выбрано на шаге 4
                     sp_camp_payload["budget"] = data["budget"]
@@ -1730,8 +1736,8 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                     "advertiser_id": advertiser_id,
                     "campaign_id": campaign_id,
                     "adgroup_name": data["adgroup_name"],
-                    "optimization_goal": "CONVERT" if is_website_lead else "LEAD_GENERATION",
-                    "promotion_type": "WEBSITE" if is_website_lead else "LEAD_GENERATION",
+                    "optimization_goal": "LEAD_GENERATION",
+                    "promotion_type": "LEAD_GENERATION",
                     "bid_type": data.get("bid_type", "BID_TYPE_NO_BID"),
                     "billing_event": "OCPM",
                     "schedule_type": "SCHEDULE_START_END" if data.get("schedule_end") else "SCHEDULE_FROM_NOW",
