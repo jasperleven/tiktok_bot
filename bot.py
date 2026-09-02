@@ -1813,7 +1813,7 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                         "image_info": [{"web_uri": vid_web_uri}],
                         "identity_type": identity["identity_type"],
                         "identity_id": identity["identity_id"],
-                        "identity_authorized_bc_id": identity.get("identity_authorized_bc_id", ""),
+                        "identity_authorized_bc_id": identity.get("identity_authorized_bc_id") or "",
                     }
                     if identity.get("ads_only_mode"):
                         ci["dark_post_status"] = "ON"
