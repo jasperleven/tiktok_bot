@@ -1738,6 +1738,12 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                     "adgroup_name": data["adgroup_name"],
                     "optimization_goal": "LEAD_GENERATION",
                     "promotion_type": "LEAD_GENERATION",
+                    # Найдено через тикет в поддержку TikTok (2026-09-03): для
+                    # objective_type=LEAD_GENERATION именно ЭТО поле переключает
+                    # Location между Instant Form и внешним сайтом — не promotion_type
+                    # и не optimization_goal, как мы предполагали раньше.
+                    # INSTANT_PAGE = TikTok Instant Form, EXTERNAL_WEBSITE = сайт клиента.
+                    "promotion_target_type": "EXTERNAL_WEBSITE" if is_website_lead else "INSTANT_PAGE",
                     "bid_type": data.get("bid_type", "BID_TYPE_NO_BID"),
                     "billing_event": "OCPM",
                     "schedule_type": "SCHEDULE_START_END" if data.get("schedule_end") else "SCHEDULE_FROM_NOW",
