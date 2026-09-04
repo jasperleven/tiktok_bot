@@ -1263,7 +1263,7 @@ async def got_bid_amount(message: types.Message, state: FSMContext):
 async def skip_pixel(message: types.Message, state: FSMContext):
     await state.update_data(pixel_id=None)
     await state.set_state(CampaignStates.video_upload)
-    await message.answer("Шаг 14/17 — Отправь видео файлом (не как медиа)")
+    await message.answer("Шаг 14/17 — Отправь видео файлом")
 
 
 @dp.message(CampaignStates.pixel_search, F.text != "◀️ Назад")
@@ -1502,7 +1502,7 @@ async def got_content_settings(callback: types.CallbackQuery, state: FSMContext)
     if action == "done":
         await state.set_state(CampaignStates.video_upload)
         await callback.message.answer(
-            "Шаг 14/17 — Отправь видео файлом (не как медиа):",
+            "Шаг 14/17 — Отправь видео файлом:",
             reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="◀️ Назад")]], resize_keyboard=True)
         )
         await callback.answer()
@@ -1899,7 +1899,7 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
 
                 total_ad_ids = []
                 group_errors = []
-                for group in groups:
+                for group_index, group in enumerate(groups):
                     group_name = group.get("adgroup_name") or data.get("adgroup_name", "")
                     group_videos = group.get("videos") or []
                     group_ad_url = group.get("ad_url") or data.get("ad_url", "")
@@ -1926,7 +1926,7 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                         "placements": data.get("placements", ["PLACEMENT_TIKTOK"]),
                         "targeting_optimization_mode": targeting_optimization_mode,
                         "targeting_spec": targeting_spec,
-                        "request_id": str(int(time.time() * 1000)) + "_" + group_name[:8],
+                        "request_id": str(int(time.time() * 1000) + group_index),
                     }
                     if not budget_optimize_on:
                         # Бюджет на группу объявлений — выбрано на шаге 4
@@ -2259,7 +2259,7 @@ async def show_step(state, msg_or_cb, step_name):
     elif step_name == "video_upload":
         await state.set_state(CampaignStates.video_upload)
         kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="◀️ Назад")]], resize_keyboard=True)
-        await m.answer("Шаг 14/17 — Отправь видео файлом (не как медиа)", reply_markup=kb)
+        await m.answer("Шаг 14/17 — Отправь видео файлом", reply_markup=kb)
 
     elif step_name == "ad_text":
         await state.set_state(CampaignStates.ad_text)
