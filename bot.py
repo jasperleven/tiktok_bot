@@ -174,6 +174,31 @@ def user_has_selected_bc(user_id) -> bool:
     return str(user_id) in sel
 
 
+_CYRILLIC_TO_LATIN = {
+    "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "yo", "ж": "zh",
+    "з": "z", "и": "i", "й": "y", "к": "k", "л": "l", "м": "m", "н": "n", "о": "o",
+    "п": "p", "р": "r", "с": "s", "т": "t", "у": "u", "ф": "f", "х": "h", "ц": "ts",
+    "ч": "ch", "ш": "sh", "щ": "sch", "ъ": "", "ы": "y", "ь": "", "э": "e", "ю": "yu",
+    "я": "ya",
+}
+
+
+def transliterate(text):
+    """Кириллица -> латиница. TikTok URL-кодирует не-ASCII символы в имени файла
+    при сохранении в Creative Library (превращает 'велосипед' в '%D0%B2%D0...'),
+    что нечитаемо в интерфейсе — транслитерация даёт то же узнаваемое имя, но
+    без этой проблемы."""
+    result = []
+    for ch in text:
+        lower = ch.lower()
+        if lower in _CYRILLIC_TO_LATIN:
+            latin = _CYRILLIC_TO_LATIN[lower]
+            result.append(latin.capitalize() if ch.isupper() and latin else latin)
+        else:
+            result.append(ch)
+    return "".join(result)
+
+
 def sanitize_upload_filename(original_filename, advertiser_id, video_bytes):
     """Формирует имя файла для загрузки видео в TikTok. Приоритет — сохранить
     исходное имя (без пути и с очисткой недопустимых символов), чтобы у
@@ -186,7 +211,8 @@ def sanitize_upload_filename(original_filename, advertiser_id, video_bytes):
     между повторными загрузками одного и того же файла."""
     if original_filename:
         name, ext = os.path.splitext(original_filename)
-        name = re.sub(r"[^a-zA-Zа-яА-ЯёЁ0-9_\-]", "_", name).strip("_")
+        name = transliterate(name)
+        name = re.sub(r"[^a-zA-Z0-9_\-]", "_", name).strip("_")
         if not name:
             name = "video"
         if not ext or len(ext) > 5:
@@ -1271,7 +1297,7 @@ async def got_bid_amount(message: types.Message, state: FSMContext):
 async def skip_pixel(message: types.Message, state: FSMContext):
     await state.update_data(pixel_id=None)
     await state.set_state(CampaignStates.video_upload)
-    await message.answer("Шаг 14/17 — Отправь видео файлом")
+    await message.answer("Шаг 14/17 — Отправь видео файлом (при отправке нажать галочку «Отправить как файл»)")
 
 
 @dp.message(CampaignStates.pixel_search, F.text != "◀️ Назад")
@@ -1572,7 +1598,7 @@ async def got_content_settings(callback: types.CallbackQuery, state: FSMContext)
     if action == "done":
         await state.set_state(CampaignStates.video_upload)
         await callback.message.answer(
-            "Шаг 14/17 — Отправь видео файлом:",
+            "Шаг 14/17 — Отправь видео файлом (при отправке нажать галочку «Отправить как файл»):",
             reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="◀️ Назад")]], resize_keyboard=True)
         )
         await callback.answer()
@@ -1782,7 +1808,7 @@ async def got_adgroup_name_reuse(message: types.Message, state: FSMContext):
     await state.update_data(adgroup_name=message.text)
     await state.set_state(CampaignStates.video_upload)
     await message.answer(
-        "Шаг 14/17 — Отправь видео файлом:",
+        "Шаг 14/17 — Отправь видео файлом (при отправке нажать галочку «Отправить как файл»):",
         reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="◀️ Назад")]], resize_keyboard=True)
     )
 
@@ -2415,7 +2441,7 @@ async def show_step(state, msg_or_cb, step_name):
     elif step_name == "video_upload":
         await state.set_state(CampaignStates.video_upload)
         kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="◀️ Назад")]], resize_keyboard=True)
-        await m.answer("Шаг 14/17 — Отправь видео файлом", reply_markup=kb)
+        await m.answer("Шаг 14/17 — Отправь видео файлом (при отправке нажать галочку «Отправить как файл»)", reply_markup=kb)
 
     elif step_name == "ad_text":
         await state.set_state(CampaignStates.ad_text)
