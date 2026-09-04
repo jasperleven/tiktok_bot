@@ -270,7 +270,9 @@ class CampaignStates(StatesGroup):
     budget_mode        = State()
     budget_amount      = State()
     adgroup_name       = State()
+    adgroup_name_reuse = State()
     group_more         = State()
+    group_pixel_choice = State()
     placement          = State()
     geo                = State()
     schedule_start     = State()
@@ -1290,6 +1292,16 @@ async def got_pixel_select(callback: types.CallbackQuery, state: FSMContext):
 @dp.callback_query(F.data == "pixel_skip")
 async def skip_pixel_callback(callback: types.CallbackQuery, state: FSMContext):
     await state.update_data(pixel_id=None, optimization_event=None)
+    data = await state.get_data()
+    if data.get("picking_group_pixel"):
+        await state.update_data(picking_group_pixel=False)
+        await state.set_state(CampaignStates.adgroup_name)
+        await callback.message.answer(
+            "Введи название СЛЕДУЮЩЕЙ группы объявлений:",
+            reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="◀️ Назад")]], resize_keyboard=True)
+        )
+        await callback.answer()
+        return
     await show_gender_step(callback.message, state)
     await callback.answer()
 
@@ -1425,6 +1437,22 @@ async def got_pixel_event(callback: types.CallbackQuery, state: FSMContext):
             return
         await state.update_data(optimization_event=event)
         await callback.message.answer(f"✅ Событие: {event}")
+
+    data = await state.get_data()
+    if data.get("picking_group_pixel"):
+        # Это был повторный выбор пикселя/события ДЛЯ ДОПОЛНИТЕЛЬНОЙ группы —
+        # пол/возраст/настройки контента уже заданы раньше и общие на всю
+        # кампанию, повторно спрашивать их не нужно, сразу переходим к
+        # названию новой группы.
+        await state.update_data(picking_group_pixel=False)
+        await state.set_state(CampaignStates.adgroup_name)
+        await callback.message.answer(
+            "Введи название СЛЕДУЮЩЕЙ группы объявлений:",
+            reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="◀️ Назад")]], resize_keyboard=True)
+        )
+        await callback.answer()
+        return
+
     await show_gender_step(callback.message, state)
     await callback.answer()
 
@@ -1709,11 +1737,61 @@ async def add_more_group(message: types.Message, state: FSMContext):
         "adgroup_name": data.get("adgroup_name", ""),
         "videos": data.get("videos", []),
         "ad_url": data.get("ad_url", ""),
+        "pixel_id": data.get("pixel_id"),
+        "optimization_event": data.get("optimization_event"),
+        "placement_type": data.get("placement_type"),
+        "placements": data.get("placements"),
+        "geo": data.get("geo"),
+        "schedule_start": data.get("schedule_start"),
+        "schedule_end": data.get("schedule_end"),
+        "bid_type": data.get("bid_type"),
+        "bid_amount": data.get("bid_amount"),
     })
     await state.update_data(groups=groups, videos=[], video_path=None, ad_url=None)
+    keyboard = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="🔁 Те же настройки (плейсменты/гео/даты/ставка/пиксель)")],
+            [KeyboardButton(text="🎯 Настроить всё заново для этой группы")],
+        ],
+        resize_keyboard=True, one_time_keyboard=True
+    )
+    await message.answer(
+        f"Группа {len(groups)} сохранена.\n\n"
+        f"Для новой группы использовать те же настройки (плейсменты, гео, даты, ставка, "
+        f"пиксель/событие), или настроить всё заново специально для этой группы?",
+        reply_markup=keyboard
+    )
+    await state.set_state(CampaignStates.group_pixel_choice)
+
+
+@dp.message(CampaignStates.group_pixel_choice, F.text == "🔁 Те же настройки (плейсменты/гео/даты/ставка/пиксель)")
+async def new_group_reuse_settings(message: types.Message, state: FSMContext):
+    # Ничего из data не сбрасываем — плейсменты/гео/даты/ставка/пиксель/событие
+    # остаются от предыдущей группы и используются как fallback в цикле
+    # создания (group.get(x) or data.get(x)). Просто спрашиваем название новой
+    # группы напрямую, минуя всю цепочку шагов 8–13.
+    await state.set_state(CampaignStates.adgroup_name_reuse)
+    await message.answer(
+        "Введи название СЛЕДУЮЩЕЙ группы объявлений:",
+        reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="◀️ Назад")]], resize_keyboard=True)
+    )
+
+
+@dp.message(CampaignStates.adgroup_name_reuse, F.text != "◀️ Назад")
+async def got_adgroup_name_reuse(message: types.Message, state: FSMContext):
+    await state.update_data(adgroup_name=message.text)
+    await state.set_state(CampaignStates.video_upload)
+    await message.answer(
+        "Шаг 14/17 — Отправь видео файлом:",
+        reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="◀️ Назад")]], resize_keyboard=True)
+    )
+
+
+@dp.message(CampaignStates.group_pixel_choice, F.text == "🎯 Настроить всё заново для этой группы")
+async def new_group_new_pixel(message: types.Message, state: FSMContext):
     await state.set_state(CampaignStates.adgroup_name)
     await message.answer(
-        f"Группа {len(groups)} сохранена. Введи название СЛЕДУЮЩЕЙ группы объявлений:",
+        "Введи название СЛЕДУЮЩЕЙ группы объявлений:",
         reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="◀️ Назад")]], resize_keyboard=True)
     )
 
@@ -1726,6 +1804,15 @@ async def finish_groups(message: types.Message, state: FSMContext):
         "adgroup_name": data.get("adgroup_name", ""),
         "videos": data.get("videos", []),
         "ad_url": data.get("ad_url", ""),
+        "pixel_id": data.get("pixel_id"),
+        "optimization_event": data.get("optimization_event"),
+        "placement_type": data.get("placement_type"),
+        "placements": data.get("placements"),
+        "geo": data.get("geo"),
+        "schedule_start": data.get("schedule_start"),
+        "schedule_end": data.get("schedule_end"),
+        "bid_type": data.get("bid_type"),
+        "bid_amount": data.get("bid_amount"),
     })
     await state.update_data(groups=groups)
     data = await state.get_data()
@@ -1895,8 +1982,9 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                 # часто нет фиксированной цены на лендингах), поэтому остаёмся на
                 # LEAD_GENERATION — там Website как локация переключается по TikTok Ads
                 # Manager Help ("Lead Gen Campaign with Your Website") именно через выбор
-                # событие пикселя (не FORM), без смены promotion_type.
-                is_website_lead = data.get("optimization_event") == "SUBMIT_APPLICATION"
+                # событие пикселя (не FORM), без смены promotion_type. Считается ОТДЕЛЬНО
+                # для каждой группы внутри цикла ниже (group_event/is_website_lead) —
+                # у разных групп в одной кампании может быть разный пиксель/событие.
 
                 # Кампания
                 budget_optimize_on = data.get("budget_optimize_on", True)
@@ -1918,17 +2006,6 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                     return False, f"Ошибка кампании: {sp_camp_data.get('message')}"
                 campaign_id = sp_camp_data["data"]["campaign_id"]
 
-                # Adgroup
-                targeting_spec = {"location_ids": [str(data["geo"])]}
-                if data.get("genders"):
-                    # Схема API: поле называется "gender" (строка), а не "genders" (список)
-                    targeting_spec["gender"] = data["genders"][0]
-                if data.get("age_groups"):
-                    targeting_spec["age_groups"] = data["age_groups"]
-
-                # Если выбраны конкретный пол/возраст — включаем ручной таргетинг (SpcTargetingSwitch)
-                targeting_optimization_mode = "MANUAL" if (data.get("genders") or data.get("age_groups")) else "AUTOMATIC"
-
                 # Группы объявлений — если пользователь добавлял несколько групп через
                 # "➕ Добавить ещё группу объявлений", они в data["groups"]; иначе
                 # (старый однoгрупповой сценарий) собираем одну неявную группу из
@@ -1937,6 +2014,15 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                     "adgroup_name": data.get("adgroup_name", ""),
                     "videos": data.get("videos") or [{"video_path": video_path, "ad_text": data.get("ad_text", ""), "original_filename": None}],
                     "ad_url": data.get("ad_url", ""),
+                    "pixel_id": data.get("pixel_id"),
+                    "optimization_event": data.get("optimization_event"),
+                    "placement_type": data.get("placement_type"),
+                    "placements": data.get("placements"),
+                    "geo": data.get("geo"),
+                    "schedule_start": data.get("schedule_start"),
+                    "schedule_end": data.get("schedule_end"),
+                    "bid_type": data.get("bid_type"),
+                    "bid_amount": data.get("bid_amount"),
                 }]
 
                 total_ad_ids = []
@@ -1946,6 +2032,27 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                     group_name = group.get("adgroup_name") or data.get("adgroup_name", "")
                     group_videos = group.get("videos") or []
                     group_ad_url = group.get("ad_url") or data.get("ad_url", "")
+                    # Пиксель/событие/плейсменты/гео/даты/ставка — свои у каждой группы
+                    # (если пользователь выбрал "🎯 Настроить всё заново"), иначе общие
+                    # с настроек первой группы (fallback через data.get(...)).
+                    group_pixel_id = group.get("pixel_id") or data.get("pixel_id")
+                    group_event = group.get("optimization_event") or data.get("optimization_event")
+                    is_website_lead = group_event == "SUBMIT_APPLICATION"
+                    group_placement_type = group.get("placement_type") or data.get("placement_type", "PLACEMENT_TYPE_NORMAL")
+                    group_placements = group.get("placements") or data.get("placements", ["PLACEMENT_TIKTOK"])
+                    group_geo = group.get("geo") or data.get("geo")
+                    group_schedule_start = group.get("schedule_start") or data.get("schedule_start")
+                    group_schedule_end = group.get("schedule_end") if group.get("schedule_end") is not None else data.get("schedule_end")
+                    group_bid_type = group.get("bid_type") or data.get("bid_type", "BID_TYPE_NO_BID")
+                    group_bid_amount = group.get("bid_amount") or data.get("bid_amount")
+
+                    group_targeting_spec = {"location_ids": [str(group_geo)]}
+                    if data.get("genders"):
+                        # Схема API: поле называется "gender" (строка), а не "genders" (список)
+                        group_targeting_spec["gender"] = data["genders"][0]
+                    if data.get("age_groups"):
+                        group_targeting_spec["age_groups"] = data["age_groups"]
+                    group_targeting_optimization_mode = "MANUAL" if (data.get("genders") or data.get("age_groups")) else "AUTOMATIC"
 
                     sp_adgroup_payload = {
                         "advertiser_id": advertiser_id,
@@ -1961,14 +2068,14 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                         "optimization_goal": "CONVERT" if is_website_lead else "LEAD_GENERATION",
                         "promotion_type": "LEAD_GENERATION",
                         "promotion_target_type": "EXTERNAL_WEBSITE" if is_website_lead else "INSTANT_PAGE",
-                        "bid_type": data.get("bid_type", "BID_TYPE_NO_BID"),
+                        "bid_type": group_bid_type,
                         "billing_event": "OCPM",
-                        "schedule_type": "SCHEDULE_START_END" if data.get("schedule_end") else "SCHEDULE_FROM_NOW",
-                        "schedule_start_time": data["schedule_start"],
-                        "placement_type": data.get("placement_type", "PLACEMENT_TYPE_NORMAL"),
-                        "placements": data.get("placements", ["PLACEMENT_TIKTOK"]),
-                        "targeting_optimization_mode": targeting_optimization_mode,
-                        "targeting_spec": targeting_spec,
+                        "schedule_type": "SCHEDULE_START_END" if group_schedule_end else "SCHEDULE_FROM_NOW",
+                        "schedule_start_time": group_schedule_start,
+                        "placement_type": group_placement_type,
+                        "placements": group_placements,
+                        "targeting_optimization_mode": group_targeting_optimization_mode,
+                        "targeting_spec": group_targeting_spec,
                         "request_id": str(int(time.time() * 1000) + group_index),
                     }
                     if not budget_optimize_on:
@@ -1980,10 +2087,10 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                             ag_budget_mode = "BUDGET_MODE_DYNAMIC_DAILY_BUDGET"
                         sp_adgroup_payload["budget"] = data["budget"]
                         sp_adgroup_payload["budget_mode"] = ag_budget_mode
-                    if data.get("bid_amount") and data.get("bid_type") == "BID_TYPE_CUSTOM":
-                        sp_adgroup_payload["conversion_bid_price"] = float(data["bid_amount"])
-                    if data.get("schedule_end"):
-                        sp_adgroup_payload["schedule_end_time"] = data["schedule_end"]
+                    if group_bid_amount and group_bid_type == "BID_TYPE_CUSTOM":
+                        sp_adgroup_payload["conversion_bid_price"] = float(group_bid_amount)
+                    if group_schedule_end:
+                        sp_adgroup_payload["schedule_end_time"] = group_schedule_end
                     if is_website_lead and group_ad_url:
                         sp_adgroup_payload["landing_page_url"] = group_ad_url
                     if data.get("comment_disabled"):
@@ -1993,13 +2100,13 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                     if data.get("share_disabled"):
                         sp_adgroup_payload["share_disabled"] = True
                     # Проверяем что пиксель существует в этом кабинете
-                    if data.get("pixel_id"):
+                    if group_pixel_id:
                         pixels = await search_pixels(advertiser_id, "")
                         pixel_ids = [p["pixel_id"] for p in pixels]
-                        if data["pixel_id"] in pixel_ids:
-                            sp_adgroup_payload["pixel_id"] = data["pixel_id"]
-                            if data.get("optimization_event"):
-                                sp_adgroup_payload["optimization_event"] = data["optimization_event"]
+                        if group_pixel_id in pixel_ids:
+                            sp_adgroup_payload["pixel_id"] = group_pixel_id
+                            if group_event:
+                                sp_adgroup_payload["optimization_event"] = group_event
 
                     sp_adgroup_resp = await session.post(f"{base_url}/smart_plus/adgroup/create/", json=sp_adgroup_payload, headers=headers)
                     sp_adgroup_data = await sp_adgroup_resp.json()
