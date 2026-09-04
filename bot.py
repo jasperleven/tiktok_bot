@@ -339,7 +339,7 @@ async def pixel_has_event(advertiser_id, pixel_id, optimization_event):
             )
             data = await resp.json()
             if data.get("code") != 0:
-                return True  # не смогли проверить — не блокируем, пусть решает сам API
+                return False  # не смогли проверить — блокируем (fail closed), не пропускаем
             for p in data.get("data", {}).get("pixels", []):
                 if str(p.get("pixel_id", "")) == str(pixel_id):
                     for ev in p.get("events", []):
@@ -355,9 +355,9 @@ async def pixel_has_event(advertiser_id, pixel_id, optimization_event):
                         if matches and not ev.get("deprecated"):
                             return True
                     return False
-            return True
+            return False  # пиксель не найден в списке этого кабинета — блокируем
     except Exception:
-        return True
+        return False
 
 
 async def get_identity(advertiser_id, session, base_url, headers):
@@ -1346,10 +1346,19 @@ async def show_pixel_event(m, state: FSMContext):
     if real_events:
         for key, label in real_events:
             rows.append([InlineKeyboardButton(text=label, callback_data=f"event_{key}")])
+        # Запоминаем ИМЕННО ЭТОТ список — при клике сверяемся с ним же, без
+        # повторного живого запроса к API. Раньше вторая (повторная) проверка
+        # при клике иногда "не блокировала" на временном сбое сети, и
+        # несуществующее у пикселя событие проскакивало в TikTok API с ошибкой
+        # только на шаге создания adgroup — это и чинит.
+        await state.update_data(
+            verified_pixel_events=[k for k, _ in real_events],
+            verified_pixel_events_for=pixel_id,
+        )
     else:
         # Не удалось получить реальный список событий пикселя (сеть/ошибка API) —
-        # показываем статичный список как раньше; got_pixel_event всё равно
-        # перепроверит совместимость перед сохранением.
+        # показываем статичный список, но помечаем, что список НЕ проверен —
+        # got_pixel_event тогда обязан сходить за живой проверкой перед сохранением.
         rows = [
             [InlineKeyboardButton(text="📋 Заполненная форма (в TikTok)", callback_data="event_FORM")],
             [InlineKeyboardButton(text="🌐 Заявка на сайте", callback_data="event_SUBMIT_APPLICATION")],
@@ -1357,6 +1366,7 @@ async def show_pixel_event(m, state: FSMContext):
             [InlineKeyboardButton(text="📝 Регистрация", callback_data="event_ON_WEB_REGISTER")],
             [InlineKeyboardButton(text="📞 Контакт", callback_data="event_CONSULT")],
         ]
+        await state.update_data(verified_pixel_events=None, verified_pixel_events_for=None)
     rows.append([InlineKeyboardButton(text="⏭ Пропустить", callback_data="event_skip")])
     keyboard = InlineKeyboardMarkup(inline_keyboard=rows)
     await m.answer("Шаг 13б — Событие пикселя:", reply_markup=keyboard)
@@ -1372,11 +1382,31 @@ async def got_pixel_event(callback: types.CallbackQuery, state: FSMContext):
         data = await state.get_data()
         pixel_id = data.get("pixel_id")
         check_advertiser_id = (data.get("selected_advertisers") or [None])[0]
-        if pixel_id and check_advertiser_id and not await pixel_has_event(check_advertiser_id, pixel_id, event):
+        verified_events = data.get("verified_pixel_events")
+        verified_for = data.get("verified_pixel_events_for")
+
+        blocked = False
+        if verified_events is not None and verified_for == pixel_id:
+            # Есть сохранённый при показе кнопок список реальных событий этого
+            # же пикселя — сверяемся с ним напрямую, без сети и без риска
+            # "не смогли проверить, пропускаем".
+            blocked = event not in verified_events
+        elif pixel_id and check_advertiser_id:
+            # Список при показе получить не удалось (сеть/ошибка API) — делаем
+            # живую проверку сейчас. Если и она не отвечает — блокируем
+            # (fail closed), а не пропускаем как раньше: лучше попросить
+            # повторить, чем пустить в TikTok заведомо несовместимую пару
+            # пиксель+событие и получить неясную ошибку на шаге adgroup/create/.
+            try:
+                blocked = not await pixel_has_event(check_advertiser_id, pixel_id, event)
+            except Exception:
+                blocked = True
+
+        if blocked:
             await callback.message.answer(
-                f"⚠️ У выбранного пикселя не настроено событие «{event}». "
-                f"Выбери другое событие или другой пиксель (⏭ Назад к выбору пикселя нет — "
-                f"просто выбери /newcampaign заново с нужным пикселем)."
+                f"⚠️ У выбранного пикселя не настроено событие «{event}» (или не удалось это "
+                f"проверить — попробуй ещё раз). Выбери другое событие из списка ниже, "
+                f"либо начни заново /newcampaign с другим пикселем."
             )
             await show_pixel_event(callback.message, state)
             await callback.answer()
