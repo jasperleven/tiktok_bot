@@ -319,7 +319,16 @@ async def pixel_has_event(advertiser_id, pixel_id, optimization_event):
             for p in data.get("data", {}).get("pixels", []):
                 if str(p.get("pixel_id", "")) == str(pixel_id):
                     for ev in p.get("events", []):
-                        if ev.get("optimization_event") == optimization_event and not ev.get("deprecated"):
+                        # Некоторые типы событий (например SUBMIT_APPLICATION) в ответе
+                        # pixel/list/ приходят с optimization_event: null, хотя
+                        # event_type у них верный и API их принимает как значение
+                        # optimization_event при создании adgroup — поэтому сверяем
+                        # с обоими полями.
+                        matches = (
+                            ev.get("optimization_event") == optimization_event
+                            or ev.get("event_type") == optimization_event
+                        )
+                        if matches and not ev.get("deprecated"):
                             return True
                     return False
             return True
@@ -1258,7 +1267,7 @@ async def skip_pixel_callback(callback: types.CallbackQuery, state: FSMContext):
 async def show_pixel_event(m, state: FSMContext):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📋 Заполненная форма (в TikTok)", callback_data="event_FORM")],
-        [InlineKeyboardButton(text="🌐 Заявка на сайте", callback_data="event_ON_WEB_ORDER")],
+        [InlineKeyboardButton(text="🌐 Заявка на сайте", callback_data="event_SUBMIT_APPLICATION")],
         [InlineKeyboardButton(text="🛒 Покупка", callback_data="event_SHOPPING")],
         [InlineKeyboardButton(text="📝 Регистрация", callback_data="event_ON_WEB_REGISTER")],
         [InlineKeyboardButton(text="📞 Контакт", callback_data="event_CONSULT")],
@@ -1699,7 +1708,7 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                 # LEAD_GENERATION — там Website как локация переключается по TikTok Ads
                 # Manager Help ("Lead Gen Campaign with Your Website") именно через выбор
                 # событие пикселя (не FORM), без смены promotion_type.
-                is_website_lead = data.get("optimization_event") == "ON_WEB_ORDER"
+                is_website_lead = data.get("optimization_event") == "SUBMIT_APPLICATION"
 
                 # Кампания
                 budget_optimize_on = data.get("budget_optimize_on", True)
@@ -1736,13 +1745,15 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                     "advertiser_id": advertiser_id,
                     "campaign_id": campaign_id,
                     "adgroup_name": data["adgroup_name"],
-                    "optimization_goal": "LEAD_GENERATION",
+                    # Подтверждено тестами 2026-09-04 (через тикет в поддержку TikTok +
+                    # прямые API-тесты, полная цепочка campaign+adgroup+ad code:0):
+                    # для Instant Form — optimization_goal=LEAD_GENERATION,
+                    # promotion_target_type=INSTANT_PAGE (или не указывать вовсе).
+                    # Для внешнего сайта — optimization_goal=CONVERT,
+                    # promotion_target_type=EXTERNAL_WEBSITE. promotion_type в обоих
+                    # случаях остаётся "LEAD_GENERATION" — его менять не нужно.
+                    "optimization_goal": "CONVERT" if is_website_lead else "LEAD_GENERATION",
                     "promotion_type": "LEAD_GENERATION",
-                    # Найдено через тикет в поддержку TikTok (2026-09-03): для
-                    # objective_type=LEAD_GENERATION именно ЭТО поле переключает
-                    # Location между Instant Form и внешним сайтом — не promotion_type
-                    # и не optimization_goal, как мы предполагали раньше.
-                    # INSTANT_PAGE = TikTok Instant Form, EXTERNAL_WEBSITE = сайт клиента.
                     "promotion_target_type": "EXTERNAL_WEBSITE" if is_website_lead else "INSTANT_PAGE",
                     "bid_type": data.get("bid_type", "BID_TYPE_NO_BID"),
                     "billing_event": "OCPM",
