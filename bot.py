@@ -1264,15 +1264,77 @@ async def skip_pixel_callback(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+async def get_pixel_events(advertiser_id, pixel_id):
+    """Возвращает список реально настроенных событий у конкретного пикселя —
+    [(event_key, label), ...] — чтобы показывать пользователю только валидные
+    варианты и физически исключить ошибку 'This pixel event type does not
+    exist' на шаге создания adgroup. event_key — это то же значение, что API
+    ожидает как optimization_event (event_type, а не всегда optimization_event —
+    у некоторых типов, например SUBMIT_APPLICATION, optimization_event: null)."""
+    labels = {
+        "FORM": "📋 Заполненная форма (в TikTok)",
+        "SUBMIT_APPLICATION": "🌐 Заявка на сайте",
+        "ON_WEB_ORDER": "🛒 Заказ/покупка на сайте",
+        "SHOPPING": "🛒 Покупка",
+        "ON_WEB_REGISTER": "📝 Регистрация",
+        "CONSULT": "📞 Контакт",
+        "COMPLETE_PAYMENT": "💳 Оплата",
+    }
+    try:
+        async with aiohttp.ClientSession() as session:
+            resp = await session.get(
+                "https://business-api.tiktok.com/open_api/v1.3/pixel/list/",
+                params={"advertiser_id": advertiser_id, "page_size": 100},
+                headers={"Access-Token": get_token_for_advertiser(advertiser_id)}
+            )
+            data = await resp.json()
+            if data.get("code") != 0:
+                return None  # не смогли получить — сигнал использовать статичный список
+            for p in data.get("data", {}).get("pixels", []):
+                if str(p.get("pixel_id", "")) == str(pixel_id):
+                    result = []
+                    seen = set()
+                    for ev in p.get("events", []):
+                        if ev.get("deprecated"):
+                            continue
+                        key = ev.get("event_type")
+                        if not key or key in seen or key in ("PAGE_VIEW", "LANDING_PAGE_VIEW", "ENGAGED_SESSION"):
+                            continue
+                        seen.add(key)
+                        result.append((key, labels.get(key, f"• {key}")))
+                    return result
+            return None
+    except Exception:
+        return None
+
+
+
 async def show_pixel_event(m, state: FSMContext):
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📋 Заполненная форма (в TikTok)", callback_data="event_FORM")],
-        [InlineKeyboardButton(text="🌐 Заявка на сайте", callback_data="event_SUBMIT_APPLICATION")],
-        [InlineKeyboardButton(text="🛒 Покупка", callback_data="event_SHOPPING")],
-        [InlineKeyboardButton(text="📝 Регистрация", callback_data="event_ON_WEB_REGISTER")],
-        [InlineKeyboardButton(text="📞 Контакт", callback_data="event_CONSULT")],
-        [InlineKeyboardButton(text="⏭ Пропустить", callback_data="event_skip")],
-    ])
+    data = await state.get_data()
+    pixel_id = data.get("pixel_id")
+    check_advertiser_id = (data.get("selected_advertisers") or [None])[0]
+
+    rows = []
+    real_events = None
+    if pixel_id and check_advertiser_id:
+        real_events = await get_pixel_events(check_advertiser_id, pixel_id)
+
+    if real_events:
+        for key, label in real_events:
+            rows.append([InlineKeyboardButton(text=label, callback_data=f"event_{key}")])
+    else:
+        # Не удалось получить реальный список событий пикселя (сеть/ошибка API) —
+        # показываем статичный список как раньше; got_pixel_event всё равно
+        # перепроверит совместимость перед сохранением.
+        rows = [
+            [InlineKeyboardButton(text="📋 Заполненная форма (в TikTok)", callback_data="event_FORM")],
+            [InlineKeyboardButton(text="🌐 Заявка на сайте", callback_data="event_SUBMIT_APPLICATION")],
+            [InlineKeyboardButton(text="🛒 Покупка", callback_data="event_SHOPPING")],
+            [InlineKeyboardButton(text="📝 Регистрация", callback_data="event_ON_WEB_REGISTER")],
+            [InlineKeyboardButton(text="📞 Контакт", callback_data="event_CONSULT")],
+        ]
+    rows.append([InlineKeyboardButton(text="⏭ Пропустить", callback_data="event_skip")])
+    keyboard = InlineKeyboardMarkup(inline_keyboard=rows)
     await m.answer("Шаг 13б — Событие пикселя:", reply_markup=keyboard)
     await state.set_state(CampaignStates.pixel_event)
 
