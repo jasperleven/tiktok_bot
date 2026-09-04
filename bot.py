@@ -1,6 +1,7 @@
 import asyncio
 import os
 import json
+import re
 import threading
 import aiohttp
 import tempfile
@@ -173,6 +174,28 @@ def user_has_selected_bc(user_id) -> bool:
     return str(user_id) in sel
 
 
+def sanitize_upload_filename(original_filename, advertiser_id, video_bytes):
+    """Формирует имя файла для загрузки видео в TikTok. Приоритет — сохранить
+    исходное имя (без пути и с очисткой недопустимых символов), чтобы у
+    одного и того же креатива было одинаковое узнаваемое имя в TikTok Ads
+    Manager при повторной загрузке на разные кабинеты (нужно для сведения
+    аналитики продаж). TikTok всё равно допишет собственный суффикс к имени
+    при сохранении — на это повлиять нельзя, важна только НАЧАЛЬНАЯ часть.
+    Если оригинального имени нет (видео отправлено как сжатое видео, не
+    файл) — используется fallback на хэш содержимого (MD5), тоже стабильный
+    между повторными загрузками одного и того же файла."""
+    if original_filename:
+        name, ext = os.path.splitext(original_filename)
+        name = re.sub(r"[^a-zA-Zа-яА-ЯёЁ0-9_\-]", "_", name).strip("_")
+        if not name:
+            name = "video"
+        if not ext or len(ext) > 5:
+            ext = ".mp4"
+        return f"{name}{ext}"
+    md5_hash = hashlib.md5(video_bytes).hexdigest()
+    return f"{md5_hash}.mp4"
+
+
 def get_token_for_advertiser(advertiser_id: str) -> str:
     """Возвращает нужный access token в зависимости от того, какому БЦ принадлежит кабинет."""
     if str(advertiser_id) in BC_NASTYA:
@@ -247,6 +270,7 @@ class CampaignStates(StatesGroup):
     budget_mode        = State()
     budget_amount      = State()
     adgroup_name       = State()
+    group_more         = State()
     placement          = State()
     geo                = State()
     schedule_start     = State()
@@ -1527,6 +1551,11 @@ async def cmd_restart(message: types.Message, state: FSMContext):
 async def got_campaign_video(message: types.Message, state: FSMContext):
     import tempfile, shutil
     file_id = message.document.file_id if message.document else message.video.file_id
+    # Оригинальное имя файла доступно только если видео отправлено как ФАЙЛ
+    # (📎 → Файл), а не как сжатое видео — в последнем случае Telegram имени
+    # не передаёт вовсе. Используется дальше как имя креатива при загрузке в
+    # TikTok, чтобы сведение аналитики по продажам не ломалось между итерациями.
+    original_filename = message.document.file_name if message.document else None
 
     await message.answer("⏳ Скачиваю видео на сервер...")
 
@@ -1554,7 +1583,7 @@ async def got_campaign_video(message: types.Message, state: FSMContext):
         else:
             raise Exception(f"Файл не найден: {local_file}")
 
-        await state.update_data(video_path=video_path)
+        await state.update_data(video_path=video_path, original_filename=original_filename)
         await state.set_state(CampaignStates.ad_text)
         size = os.path.getsize(video_path)
         data = await state.get_data()
@@ -1574,9 +1603,10 @@ async def got_ad_text(message: types.Message, state: FSMContext):
     videos = data.get("videos", [])
     videos.append({
         "video_path": data.get("video_path"),
-        "ad_text": message.text[:100]
+        "ad_text": message.text[:100],
+        "original_filename": data.get("original_filename"),
     })
-    await state.update_data(videos=videos, video_path=None)
+    await state.update_data(videos=videos, video_path=None, original_filename=None)
 
     keyboard = ReplyKeyboardMarkup(
         keyboard=[
@@ -1613,15 +1643,61 @@ async def ready_for_url(message: types.Message, state: FSMContext):
 async def got_ad_url(message: types.Message, state: FSMContext):
     await state.update_data(ad_url=message.text)
     data = await state.get_data()
+    keyboard = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="➕ Добавить ещё группу объявлений")],
+            [KeyboardButton(text="✅ Готово, к подтверждению")],
+        ],
+        resize_keyboard=True, one_time_keyboard=True
+    )
+    await message.answer(
+        f"✅ Группа «{data.get('adgroup_name', '')}» готова: {len(data.get('videos', []))} креатив(ов).\n\n"
+        f"Добавить ещё одну группу объявлений (с новым названием и своими креативами) в эту же кампанию, "
+        f"или перейти к подтверждению?",
+        reply_markup=keyboard
+    )
+    await state.set_state(CampaignStates.group_more)
+
+
+@dp.message(CampaignStates.group_more, F.text == "➕ Добавить ещё группу объявлений")
+async def add_more_group(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    groups = data.get("groups", [])
+    groups.append({
+        "adgroup_name": data.get("adgroup_name", ""),
+        "videos": data.get("videos", []),
+        "ad_url": data.get("ad_url", ""),
+    })
+    await state.update_data(groups=groups, videos=[], video_path=None, ad_url=None)
+    await state.set_state(CampaignStates.adgroup_name)
+    await message.answer(
+        f"Группа {len(groups)} сохранена. Введи название СЛЕДУЮЩЕЙ группы объявлений:",
+        reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="◀️ Назад")]], resize_keyboard=True)
+    )
+
+
+@dp.message(CampaignStates.group_more, F.text == "✅ Готово, к подтверждению")
+async def finish_groups(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    groups = data.get("groups", [])
+    groups.append({
+        "adgroup_name": data.get("adgroup_name", ""),
+        "videos": data.get("videos", []),
+        "ad_url": data.get("ad_url", ""),
+    })
+    await state.update_data(groups=groups)
+    data = await state.get_data()
     selected = data.get("selected_advertisers", [])
     names = [ALL_ADVERTISERS.get(a, a) for a in selected]
-    videos = data.get("videos", [])
+    total_videos = sum(len(g["videos"]) for g in groups)
+    groups_summary = "\n".join(f"  • {g['adgroup_name']}: {len(g['videos'])} креатив(ов)" for g in groups)
     text = (
         f"Шаг 17/17 — Подтверждение\n\n"
         f"📋 {data['campaign_name']}\n"
         f"🎯 Цель: {data['objective']}\n"
         f"💰 Бюджет: {data['budget']} USD\n"
-        f"🎬 Видео: {len(videos)} шт.\n"
+        f"📦 Групп объявлений: {len(groups)}\n{groups_summary}\n"
+        f"🎬 Всего видео: {total_videos}\n"
         f"📁 Кабинетов: {len(selected)}\n\n" +
         "\n".join(f"• {n}" for n in names)
     )
@@ -1645,9 +1721,12 @@ async def create_campaign(callback: types.CallbackQuery, state: FSMContext):
 
     videos = data.get("videos", [])
     video_path = data.get("video_path")
+    groups = data.get("groups", [])
 
-    # Проверяем что есть хотя бы одно видео
-    if not videos and (not video_path or not os.path.exists(video_path)):
+    # Проверяем что есть хотя бы одно видео (в текущей группе, в уже сохранённых
+    # группах, или как одиночный video_path для обратной совместимости)
+    has_any_video = bool(videos) or bool(video_path and os.path.exists(video_path)) or any(g.get("videos") for g in groups)
+    if not has_any_video:
         await callback.message.answer("❌ Видео не найдено. Начни заново /newcampaign")
         return
 
@@ -1662,8 +1741,11 @@ async def create_campaign(callback: types.CallbackQuery, state: FSMContext):
             except Exception:
                 await asyncio.sleep(3)
 
-    # Удаляем все временные видео
-    for vid_item in videos:
+    # Удаляем все временные видео (из всех групп, если их было несколько)
+    all_video_items = list(videos)
+    for g in data.get("groups", []):
+        all_video_items.extend(g.get("videos", []))
+    for vid_item in all_video_items:
         vp = vid_item.get("video_path")
         if vp and os.path.exists(vp):
             os.remove(vp)
@@ -1686,8 +1768,10 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
 
         # Получаем video_path из videos списка если не передан напрямую
         videos = data.get("videos", [])
+        original_filename = None
         if not video_path and videos:
             video_path = videos[0].get("video_path")
+            original_filename = videos[0].get("original_filename")
 
         async with aiohttp.ClientSession() as session:
             identity = await get_identity(advertiser_id, session, base_url, headers)
@@ -1701,7 +1785,7 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
             form.add_field("upload_type", "UPLOAD_BY_FILE")
             form.add_field("video_signature", md5_hash)
             form.add_field("video_file", video_bytes,
-                filename=f"video_{advertiser_id}_{int(time.time())}.mp4",
+                filename=sanitize_upload_filename(original_filename, advertiser_id, video_bytes),
                 content_type="video/mp4")
             upload_resp = await session.post(
                 f"{base_url}/file/video/ad/upload/",
@@ -1803,65 +1887,170 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                 # Если выбраны конкретный пол/возраст — включаем ручной таргетинг (SpcTargetingSwitch)
                 targeting_optimization_mode = "MANUAL" if (data.get("genders") or data.get("age_groups")) else "AUTOMATIC"
 
-                sp_adgroup_payload = {
-                    "advertiser_id": advertiser_id,
-                    "campaign_id": campaign_id,
-                    "adgroup_name": data["adgroup_name"],
-                    # Подтверждено тестами 2026-09-04 (через тикет в поддержку TikTok +
-                    # прямые API-тесты, полная цепочка campaign+adgroup+ad code:0):
-                    # для Instant Form — optimization_goal=LEAD_GENERATION,
-                    # promotion_target_type=INSTANT_PAGE (или не указывать вовсе).
-                    # Для внешнего сайта — optimization_goal=CONVERT,
-                    # promotion_target_type=EXTERNAL_WEBSITE. promotion_type в обоих
-                    # случаях остаётся "LEAD_GENERATION" — его менять не нужно.
-                    "optimization_goal": "CONVERT" if is_website_lead else "LEAD_GENERATION",
-                    "promotion_type": "LEAD_GENERATION",
-                    "promotion_target_type": "EXTERNAL_WEBSITE" if is_website_lead else "INSTANT_PAGE",
-                    "bid_type": data.get("bid_type", "BID_TYPE_NO_BID"),
-                    "billing_event": "OCPM",
-                    "schedule_type": "SCHEDULE_START_END" if data.get("schedule_end") else "SCHEDULE_FROM_NOW",
-                    "schedule_start_time": data["schedule_start"],
-                    "placement_type": data.get("placement_type", "PLACEMENT_TYPE_NORMAL"),
-                    "placements": data.get("placements", ["PLACEMENT_TIKTOK"]),
-                    "targeting_optimization_mode": targeting_optimization_mode,
-                    "targeting_spec": targeting_spec,
-                    "request_id": str(int(time.time() * 1000)),
-                }
-                if not budget_optimize_on:
-                    # Бюджет на группу объявлений — выбрано на шаге 4
-                    # Подтверждено тестом API: для Smart+ adgroup дневной бюджет требует
-                    # BUDGET_MODE_DYNAMIC_DAILY_BUDGET, а не обычный BUDGET_MODE_DAY
-                    ag_budget_mode = data.get("budget_mode", "BUDGET_MODE_DAY")
-                    if ag_budget_mode == "BUDGET_MODE_DAY":
-                        ag_budget_mode = "BUDGET_MODE_DYNAMIC_DAILY_BUDGET"
-                    sp_adgroup_payload["budget"] = data["budget"]
-                    sp_adgroup_payload["budget_mode"] = ag_budget_mode
-                if data.get("bid_amount") and data.get("bid_type") == "BID_TYPE_CUSTOM":
-                    sp_adgroup_payload["conversion_bid_price"] = float(data["bid_amount"])
-                if data.get("schedule_end"):
-                    sp_adgroup_payload["schedule_end_time"] = data["schedule_end"]
-                if is_website_lead and data.get("ad_url"):
-                    sp_adgroup_payload["landing_page_url"] = data["ad_url"]
-                if data.get("comment_disabled"):
-                    sp_adgroup_payload["comment_disabled"] = True
-                if data.get("download_disabled"):
-                    sp_adgroup_payload["video_download_disabled"] = True
-                if data.get("share_disabled"):
-                    sp_adgroup_payload["share_disabled"] = True
-                # Проверяем что пиксель существует в этом кабинете
-                if data.get("pixel_id"):
-                    pixels = await search_pixels(advertiser_id, "")
-                    pixel_ids = [p["pixel_id"] for p in pixels]
-                    if data["pixel_id"] in pixel_ids:
-                        sp_adgroup_payload["pixel_id"] = data["pixel_id"]
-                        if data.get("optimization_event"):
-                            sp_adgroup_payload["optimization_event"] = data["optimization_event"]
+                # Группы объявлений — если пользователь добавлял несколько групп через
+                # "➕ Добавить ещё группу объявлений", они в data["groups"]; иначе
+                # (старый однoгрупповой сценарий) собираем одну неявную группу из
+                # верхнеуровневых adgroup_name/videos/ad_url для обратной совместимости.
+                groups = data.get("groups") or [{
+                    "adgroup_name": data.get("adgroup_name", ""),
+                    "videos": data.get("videos") or [{"video_path": video_path, "ad_text": data.get("ad_text", ""), "original_filename": None}],
+                    "ad_url": data.get("ad_url", ""),
+                }]
 
-                sp_adgroup_resp = await session.post(f"{base_url}/smart_plus/adgroup/create/", json=sp_adgroup_payload, headers=headers)
-                sp_adgroup_data = await sp_adgroup_resp.json()
-                await log_api("SMART+ ADGROUP CREATE", sp_adgroup_payload, sp_adgroup_data)
-                if sp_adgroup_data.get("code") != 0:
-                    # Группа не создалась — удаляем пустую кампанию, чтобы не копился мусор
+                total_ad_ids = []
+                group_errors = []
+                for group in groups:
+                    group_name = group.get("adgroup_name") or data.get("adgroup_name", "")
+                    group_videos = group.get("videos") or []
+                    group_ad_url = group.get("ad_url") or data.get("ad_url", "")
+
+                    sp_adgroup_payload = {
+                        "advertiser_id": advertiser_id,
+                        "campaign_id": campaign_id,
+                        "adgroup_name": group_name,
+                        # Подтверждено тестами 2026-09-04 (через тикет в поддержку TikTok +
+                        # прямые API-тесты, полная цепочка campaign+adgroup+ad code:0):
+                        # для Instant Form — optimization_goal=LEAD_GENERATION,
+                        # promotion_target_type=INSTANT_PAGE (или не указывать вовсе).
+                        # Для внешнего сайта — optimization_goal=CONVERT,
+                        # promotion_target_type=EXTERNAL_WEBSITE. promotion_type в обоих
+                        # случаях остаётся "LEAD_GENERATION" — его менять не нужно.
+                        "optimization_goal": "CONVERT" if is_website_lead else "LEAD_GENERATION",
+                        "promotion_type": "LEAD_GENERATION",
+                        "promotion_target_type": "EXTERNAL_WEBSITE" if is_website_lead else "INSTANT_PAGE",
+                        "bid_type": data.get("bid_type", "BID_TYPE_NO_BID"),
+                        "billing_event": "OCPM",
+                        "schedule_type": "SCHEDULE_START_END" if data.get("schedule_end") else "SCHEDULE_FROM_NOW",
+                        "schedule_start_time": data["schedule_start"],
+                        "placement_type": data.get("placement_type", "PLACEMENT_TYPE_NORMAL"),
+                        "placements": data.get("placements", ["PLACEMENT_TIKTOK"]),
+                        "targeting_optimization_mode": targeting_optimization_mode,
+                        "targeting_spec": targeting_spec,
+                        "request_id": str(int(time.time() * 1000)) + "_" + group_name[:8],
+                    }
+                    if not budget_optimize_on:
+                        # Бюджет на группу объявлений — выбрано на шаге 4
+                        # Подтверждено тестом API: для Smart+ adgroup дневной бюджет требует
+                        # BUDGET_MODE_DYNAMIC_DAILY_BUDGET, а не обычный BUDGET_MODE_DAY
+                        ag_budget_mode = data.get("budget_mode", "BUDGET_MODE_DAY")
+                        if ag_budget_mode == "BUDGET_MODE_DAY":
+                            ag_budget_mode = "BUDGET_MODE_DYNAMIC_DAILY_BUDGET"
+                        sp_adgroup_payload["budget"] = data["budget"]
+                        sp_adgroup_payload["budget_mode"] = ag_budget_mode
+                    if data.get("bid_amount") and data.get("bid_type") == "BID_TYPE_CUSTOM":
+                        sp_adgroup_payload["conversion_bid_price"] = float(data["bid_amount"])
+                    if data.get("schedule_end"):
+                        sp_adgroup_payload["schedule_end_time"] = data["schedule_end"]
+                    if is_website_lead and group_ad_url:
+                        sp_adgroup_payload["landing_page_url"] = group_ad_url
+                    if data.get("comment_disabled"):
+                        sp_adgroup_payload["comment_disabled"] = True
+                    if data.get("download_disabled"):
+                        sp_adgroup_payload["video_download_disabled"] = True
+                    if data.get("share_disabled"):
+                        sp_adgroup_payload["share_disabled"] = True
+                    # Проверяем что пиксель существует в этом кабинете
+                    if data.get("pixel_id"):
+                        pixels = await search_pixels(advertiser_id, "")
+                        pixel_ids = [p["pixel_id"] for p in pixels]
+                        if data["pixel_id"] in pixel_ids:
+                            sp_adgroup_payload["pixel_id"] = data["pixel_id"]
+                            if data.get("optimization_event"):
+                                sp_adgroup_payload["optimization_event"] = data["optimization_event"]
+
+                    sp_adgroup_resp = await session.post(f"{base_url}/smart_plus/adgroup/create/", json=sp_adgroup_payload, headers=headers)
+                    sp_adgroup_data = await sp_adgroup_resp.json()
+                    await log_api("SMART+ ADGROUP CREATE", sp_adgroup_payload, sp_adgroup_data)
+                    if sp_adgroup_data.get("code") != 0:
+                        group_errors.append(f"{group_name}: {sp_adgroup_data.get('message')}")
+                        continue  # эта группа не создалась — пробуем следующие, кампанию не удаляем
+                    adgroup_id = sp_adgroup_data["data"]["adgroup_id"]
+
+                    for i, vid_item in enumerate(group_videos):
+                        # Загружаем видео для этого объявления
+                        vid_path = vid_item.get("video_path") or video_path
+                        with open(vid_path, "rb") as f:
+                            vbytes = f.read()
+                        vmd5 = hashlib.md5(vbytes).hexdigest()
+                        vform = aiohttp.FormData()
+                        vform.add_field("advertiser_id", advertiser_id)
+                        vform.add_field("upload_type", "UPLOAD_BY_FILE")
+                        vform.add_field("video_signature", vmd5)
+                        vform.add_field("video_file", vbytes,
+                            filename=sanitize_upload_filename(vid_item.get("original_filename"), advertiser_id, vbytes),
+                            content_type="video/mp4")
+                        vup_resp = await session.post(
+                            f"{base_url}/file/video/ad/upload/",
+                            data=vform,
+                            headers={"Access-Token": get_token_for_advertiser(advertiser_id)}
+                        )
+                        vup_data = await vup_resp.json()
+                        if vup_data.get("code") != 0:
+                            continue
+                        vd = vup_data["data"]
+                        vid_id = vd[0]["video_id"] if isinstance(vd, list) else vd["video_id"]
+                        vid_cover_url = vd[0].get("video_cover_url") if isinstance(vd, list) else vd.get("video_cover_url")
+
+                        # Ищем обложку
+                        vid_web_uri = None
+                        if not vid_cover_url:
+                            for _ in range(6):
+                                sr = await session.get(f"{base_url}/file/video/ad/search/",
+                                    params={"advertiser_id": advertiser_id, "filtering": f'{{"video_ids":["{vid_id}"]}}'},
+                                    headers=headers)
+                                sd = await sr.json()
+                                vlist = sd.get("data", {}).get("list", [])
+                                if vlist and vlist[0].get("video_cover_url"):
+                                    vid_cover_url = vlist[0]["video_cover_url"]
+                                    break
+                                await asyncio.sleep(10)
+
+                        if vid_cover_url:
+                            cr = await session.post(f"{base_url}/file/image/ad/upload/",
+                                json={"advertiser_id": advertiser_id, "upload_type": "UPLOAD_BY_URL", "image_url": vid_cover_url},
+                                headers=headers)
+                            cd = await cr.json()
+                            if cd.get("code") == 0:
+                                vid_web_uri = cd["data"]["image_id"]
+
+                        if not vid_web_uri:
+                            continue
+
+                        ci = {
+                            "ad_format": "SINGLE_VIDEO",
+                            "video_info": {"video_id": vid_id},
+                            "image_info": [{"web_uri": vid_web_uri}],
+                            "identity_type": identity["identity_type"],
+                            "identity_id": identity["identity_id"],
+                        }
+                        if identity.get("identity_authorized_bc_id"):
+                            ci["identity_authorized_bc_id"] = identity["identity_authorized_bc_id"]
+                        # CUSTOMIZED_USER — это "псевдо-identity" (не настоящий связанный TikTok
+                        # аккаунт), а не BC_AUTH_TT; для него API требует dark_post_status=ON
+                        # ("Invalid param(s): ad_configuration.identity_id is required for
+                        # non-spark ad" иначе), даже когда ads_only_mode в /identity/get/ = null
+                        # (подтверждено тестом 2026-09-02: у всех CUSTOMIZED_USER identity
+                        # этого кабинета ads_only_mode: null).
+                        if identity.get("ads_only_mode") or identity.get("identity_type") == "CUSTOMIZED_USER":
+                            ci["dark_post_status"] = "ON"
+
+                        sp_ad_payload = {
+                            "advertiser_id": advertiser_id,
+                            "adgroup_id": adgroup_id,
+                            "ad_name": f"{group_name} #{i+1}",
+                            "creative_list": [{"creative_info": ci}],
+                            "ad_text_list": [{"ad_text": vid_item.get("ad_text", "")}],
+                            "landing_page_url_list": [{"landing_page_url": group_ad_url}] if group_ad_url else [],
+                            "call_to_action_list": [{"call_to_action": "LEARN_MORE"}],
+                        }
+                        sp_ad_resp = await session.post(f"{base_url}/smart_plus/ad/create/", json=sp_ad_payload, headers=headers)
+                        sp_ad_data = await sp_ad_resp.json()
+                        await log_api("SMART+ AD CREATE", sp_ad_payload, sp_ad_data)
+                        if sp_ad_data.get("code") == 0:
+                            total_ad_ids.append(sp_ad_data["data"]["smart_plus_ad_id"])
+
+                if not total_ad_ids:
+                    # Ни одной группы/объявления не создалось — удаляем пустую кампанию
                     try:
                         await session.post(
                             f"{base_url}/smart_plus/campaign/status/update/",
@@ -1870,103 +2059,13 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                         )
                     except Exception:
                         pass
-                    return False, f"Ошибка группы: {sp_adgroup_data.get('message')}"
-                adgroup_id = sp_adgroup_data["data"]["adgroup_id"]
+                    err_detail = "; ".join(group_errors) if group_errors else "неизвестная ошибка"
+                    return False, f"Не удалось создать ни одного объявления ({err_detail})"
 
-                # Объявления — по одному для каждого видео
-                videos = data.get("videos", [])
-                if not videos:
-                    # Обратная совместимость — одно видео
-                    videos = [{"video_path": video_path, "ad_text": data.get("ad_text", "")}]
-
-                ad_ids = []
-                for i, vid_item in enumerate(videos):
-                    # Загружаем видео для этого объявления
-                    vid_path = vid_item.get("video_path") or video_path
-                    with open(vid_path, "rb") as f:
-                        vbytes = f.read()
-                    vmd5 = hashlib.md5(vbytes).hexdigest()
-                    vform = aiohttp.FormData()
-                    vform.add_field("advertiser_id", advertiser_id)
-                    vform.add_field("upload_type", "UPLOAD_BY_FILE")
-                    vform.add_field("video_signature", vmd5)
-                    vform.add_field("video_file", vbytes,
-                        filename=f"video_{advertiser_id}_{int(time.time())}_{i}.mp4",
-                        content_type="video/mp4")
-                    vup_resp = await session.post(
-                        f"{base_url}/file/video/ad/upload/",
-                        data=vform,
-                        headers={"Access-Token": get_token_for_advertiser(advertiser_id)}
-                    )
-                    vup_data = await vup_resp.json()
-                    if vup_data.get("code") != 0:
-                        continue
-                    vd = vup_data["data"]
-                    vid_id = vd[0]["video_id"] if isinstance(vd, list) else vd["video_id"]
-                    vid_cover_url = vd[0].get("video_cover_url") if isinstance(vd, list) else vd.get("video_cover_url")
-
-                    # Ищем обложку
-                    vid_web_uri = None
-                    if not vid_cover_url:
-                        for _ in range(6):
-                            sr = await session.get(f"{base_url}/file/video/ad/search/",
-                                params={"advertiser_id": advertiser_id, "filtering": f'{{"video_ids":["{vid_id}"]}}'},
-                                headers=headers)
-                            sd = await sr.json()
-                            vlist = sd.get("data", {}).get("list", [])
-                            if vlist and vlist[0].get("video_cover_url"):
-                                vid_cover_url = vlist[0]["video_cover_url"]
-                                break
-                            await asyncio.sleep(10)
-
-                    if vid_cover_url:
-                        cr = await session.post(f"{base_url}/file/image/ad/upload/",
-                            json={"advertiser_id": advertiser_id, "upload_type": "UPLOAD_BY_URL", "image_url": vid_cover_url},
-                            headers=headers)
-                        cd = await cr.json()
-                        if cd.get("code") == 0:
-                            vid_web_uri = cd["data"]["image_id"]
-
-                    if not vid_web_uri:
-                        continue
-
-                    ci = {
-                        "ad_format": "SINGLE_VIDEO",
-                        "video_info": {"video_id": vid_id},
-                        "image_info": [{"web_uri": vid_web_uri}],
-                        "identity_type": identity["identity_type"],
-                        "identity_id": identity["identity_id"],
-                    }
-                    if identity.get("identity_authorized_bc_id"):
-                        ci["identity_authorized_bc_id"] = identity["identity_authorized_bc_id"]
-                    # CUSTOMIZED_USER — это "псевдо-identity" (не настоящий связанный TikTok
-                    # аккаунт), а не BC_AUTH_TT; для него API требует dark_post_status=ON
-                    # ("Invalid param(s): ad_configuration.identity_id is required for
-                    # non-spark ad" иначе), даже когда ads_only_mode в /identity/get/ = null
-                    # (подтверждено тестом 2026-09-02: у всех CUSTOMIZED_USER identity
-                    # этого кабинета ads_only_mode: null).
-                    if identity.get("ads_only_mode") or identity.get("identity_type") == "CUSTOMIZED_USER":
-                        ci["dark_post_status"] = "ON"
-
-                    sp_ad_payload = {
-                        "advertiser_id": advertiser_id,
-                        "adgroup_id": adgroup_id,
-                        "ad_name": f"{data['campaign_name']} #{i+1}",
-                        "creative_list": [{"creative_info": ci}],
-                        "ad_text_list": [{"ad_text": vid_item.get("ad_text", "")}],
-                        "landing_page_url_list": [{"landing_page_url": data.get("ad_url", "")}] if data.get("ad_url") else [],
-                        "call_to_action_list": [{"call_to_action": "LEARN_MORE"}],
-                    }
-                    sp_ad_resp = await session.post(f"{base_url}/smart_plus/ad/create/", json=sp_ad_payload, headers=headers)
-                    sp_ad_data = await sp_ad_resp.json()
-                    await log_api("SMART+ AD CREATE", sp_ad_payload, sp_ad_data)
-                    if sp_ad_data.get("code") == 0:
-                        ad_ids.append(sp_ad_data["data"]["smart_plus_ad_id"])
-
-                if not ad_ids:
-                    return False, "Не удалось создать ни одного объявления"
-
-                return True, f"campaign: {campaign_id} | ads: {len(ad_ids)} шт."
+                result_msg = f"campaign: {campaign_id} | групп: {len(groups) - len(group_errors)}/{len(groups)} | ads: {len(total_ad_ids)} шт."
+                if group_errors:
+                    result_msg += f" | ошибки групп: {'; '.join(group_errors)}"
+                return True, result_msg
 
             else:
                 # ── Обычный flow для остальных целей ─────────────────────────
