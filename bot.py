@@ -1941,6 +1941,7 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
 
                 total_ad_ids = []
                 group_errors = []
+                failed_groups = []
                 for group_index, group in enumerate(groups):
                     group_name = group.get("adgroup_name") or data.get("adgroup_name", "")
                     group_videos = group.get("videos") or []
@@ -2005,6 +2006,7 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                     await log_api("SMART+ ADGROUP CREATE", sp_adgroup_payload, sp_adgroup_data)
                     if sp_adgroup_data.get("code") != 0:
                         group_errors.append(f"{group_name}: {sp_adgroup_data.get('message')}")
+                        failed_groups.append(group_name)
                         continue  # эта группа не создалась — пробуем следующие, кампанию не удаляем
                     adgroup_id = sp_adgroup_data["data"]["adgroup_id"]
 
@@ -2027,7 +2029,9 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                             headers={"Access-Token": get_token_for_advertiser(advertiser_id)}
                         )
                         vup_data = await vup_resp.json()
+                        await log_api(f"VIDEO UPLOAD (group {group_name})", {"advertiser_id": advertiser_id, "video_index": i}, vup_data)
                         if vup_data.get("code") != 0:
+                            group_errors.append(f"{group_name} #{i+1}: загрузка видео — {vup_data.get('message')}")
                             continue
                         vd = vup_data["data"]
                         vid_id = vd[0]["video_id"] if isinstance(vd, list) else vd["video_id"]
@@ -2056,6 +2060,7 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                                 vid_web_uri = cd["data"]["image_id"]
 
                         if not vid_web_uri:
+                            group_errors.append(f"{group_name} #{i+1}: не удалось загрузить обложку видео")
                             continue
 
                         ci = {
@@ -2090,6 +2095,8 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                         await log_api("SMART+ AD CREATE", sp_ad_payload, sp_ad_data)
                         if sp_ad_data.get("code") == 0:
                             total_ad_ids.append(sp_ad_data["data"]["smart_plus_ad_id"])
+                        else:
+                            group_errors.append(f"{group_name} #{i+1}: {sp_ad_data.get('message')}")
 
                 if not total_ad_ids:
                     # Ни одной группы/объявления не создалось — удаляем пустую кампанию
@@ -2104,9 +2111,9 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                     err_detail = "; ".join(group_errors) if group_errors else "неизвестная ошибка"
                     return False, f"Не удалось создать ни одного объявления ({err_detail})"
 
-                result_msg = f"campaign: {campaign_id} | групп: {len(groups) - len(group_errors)}/{len(groups)} | ads: {len(total_ad_ids)} шт."
+                result_msg = f"campaign: {campaign_id} | групп: {len(groups) - len(failed_groups)}/{len(groups)} | ads: {len(total_ad_ids)} шт."
                 if group_errors:
-                    result_msg += f" | ошибки групп: {'; '.join(group_errors)}"
+                    result_msg += f" | проблемы: {'; '.join(group_errors)}"
                 return True, result_msg
 
             else:
