@@ -332,30 +332,36 @@ async def pixel_has_event(advertiser_id, pixel_id, optimization_event):
     ('This pixel event type does not exist'), когда уже поздно и обидно для пользователя."""
     try:
         async with aiohttp.ClientSession() as session:
-            resp = await session.get(
-                "https://business-api.tiktok.com/open_api/v1.3/pixel/list/",
-                params={"advertiser_id": advertiser_id, "page_size": 100},
-                headers={"Access-Token": get_token_for_advertiser(advertiser_id)}
-            )
-            data = await resp.json()
-            if data.get("code") != 0:
-                return False  # не смогли проверить — блокируем (fail closed), не пропускаем
-            for p in data.get("data", {}).get("pixels", []):
-                if str(p.get("pixel_id", "")) == str(pixel_id):
-                    for ev in p.get("events", []):
-                        # Некоторые типы событий (например SUBMIT_APPLICATION) в ответе
-                        # pixel/list/ приходят с optimization_event: null, хотя
-                        # event_type у них верный и API их принимает как значение
-                        # optimization_event при создании adgroup — поэтому сверяем
-                        # с обоими полями.
-                        matches = (
-                            ev.get("optimization_event") == optimization_event
-                            or ev.get("event_type") == optimization_event
-                        )
-                        if matches and not ev.get("deprecated"):
-                            return True
-                    return False
-            return False  # пиксель не найден в списке этого кабинета — блокируем
+            page = 1
+            while True:
+                resp = await session.get(
+                    "https://business-api.tiktok.com/open_api/v1.3/pixel/list/",
+                    params={"advertiser_id": advertiser_id, "page_size": 20, "page": page},
+                    headers={"Access-Token": get_token_for_advertiser(advertiser_id)}
+                )
+                data = await resp.json()
+                if data.get("code") != 0:
+                    return False  # не смогли проверить — блокируем (fail closed), не пропускаем
+                for p in data.get("data", {}).get("pixels", []):
+                    if str(p.get("pixel_id", "")) == str(pixel_id):
+                        for ev in p.get("events", []):
+                            # Некоторые типы событий (например SUBMIT_APPLICATION) в ответе
+                            # pixel/list/ приходят с optimization_event: null, хотя
+                            # event_type у них верный и API их принимает как значение
+                            # optimization_event при создании adgroup — поэтому сверяем
+                            # с обоими полями.
+                            matches = (
+                                ev.get("optimization_event") == optimization_event
+                                or ev.get("event_type") == optimization_event
+                            )
+                            if matches and not ev.get("deprecated"):
+                                return True
+                        return False
+                page_info = data.get("data", {}).get("page_info", {})
+                if page >= page_info.get("total_page", 1):
+                    break
+                page += 1
+            return False  # пиксель не найден ни на одной странице — блокируем
     except Exception:
         return False
 
@@ -1306,27 +1312,33 @@ async def get_pixel_events(advertiser_id, pixel_id):
     }
     try:
         async with aiohttp.ClientSession() as session:
-            resp = await session.get(
-                "https://business-api.tiktok.com/open_api/v1.3/pixel/list/",
-                params={"advertiser_id": advertiser_id, "page_size": 100},
-                headers={"Access-Token": get_token_for_advertiser(advertiser_id)}
-            )
-            data = await resp.json()
-            if data.get("code") != 0:
-                return None  # не смогли получить — сигнал использовать статичный список
-            for p in data.get("data", {}).get("pixels", []):
-                if str(p.get("pixel_id", "")) == str(pixel_id):
-                    result = []
-                    seen = set()
-                    for ev in p.get("events", []):
-                        if ev.get("deprecated"):
-                            continue
-                        key = ev.get("event_type")
-                        if not key or key in seen or key in ("PAGE_VIEW", "LANDING_PAGE_VIEW", "ENGAGED_SESSION"):
-                            continue
-                        seen.add(key)
-                        result.append((key, labels.get(key, f"• {key}")))
-                    return result
+            page = 1
+            while True:
+                resp = await session.get(
+                    "https://business-api.tiktok.com/open_api/v1.3/pixel/list/",
+                    params={"advertiser_id": advertiser_id, "page_size": 20, "page": page},
+                    headers={"Access-Token": get_token_for_advertiser(advertiser_id)}
+                )
+                data = await resp.json()
+                if data.get("code") != 0:
+                    return None  # не смогли получить — сигнал использовать статичный список
+                for p in data.get("data", {}).get("pixels", []):
+                    if str(p.get("pixel_id", "")) == str(pixel_id):
+                        result = []
+                        seen = set()
+                        for ev in p.get("events", []):
+                            if ev.get("deprecated"):
+                                continue
+                            key = ev.get("event_type")
+                            if not key or key in seen or key in ("PAGE_VIEW", "LANDING_PAGE_VIEW", "ENGAGED_SESSION"):
+                                continue
+                            seen.add(key)
+                            result.append((key, labels.get(key, f"• {key}")))
+                        return result
+                page_info = data.get("data", {}).get("page_info", {})
+                if page >= page_info.get("total_page", 1):
+                    break
+                page += 1
             return None
     except Exception:
         return None
