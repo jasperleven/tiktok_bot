@@ -2452,6 +2452,13 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                             "landing_page_url_list": [{"landing_page_url": group_ad_url}] if group_ad_url else [],
                             "call_to_action_list": [{"call_to_action": data.get("call_to_action", "LEARN_MORE")}],
                         }
+                        # creative_auto_add_toggle: true — это и есть переключатель, из-за
+                        # которого TikTok показывает несколько креативов раздельными строками
+                        # в интерфейсе (без него — "No data" при развороте списка, даже если
+                        # creative_list формально содержит несколько элементов). Подтверждено
+                        # прямым сравнением ad_configuration рабочего объявления, созданного
+                        # вручную, против нашего.
+                        ad_config = {"creative_auto_add_toggle": True}
                         # При ручном создании TikTok дублирует параметры ссылки отдельным
                         # структурированным полем ad_configuration.utm_params — без него
                         # интерфейс показывает "No URL parameters" и подстановка макросов
@@ -2461,9 +2468,8 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                             parsed_url = urlparse(group_ad_url)
                             query_params = parse_qsl(parsed_url.query, keep_blank_values=True)
                             if query_params:
-                                sp_ad_payload["ad_configuration"] = {
-                                    "utm_params": [{"key": k, "value": v} for k, v in query_params]
-                                }
+                                ad_config["utm_params"] = [{"key": k, "value": v} for k, v in query_params]
+                        sp_ad_payload["ad_configuration"] = ad_config
                         sp_ad_resp = await session.post(f"{base_url}/smart_plus/ad/create/", json=sp_ad_payload, headers=headers)
                         sp_ad_data = await sp_ad_resp.json()
                         await log_api("SMART+ AD CREATE", sp_ad_payload, sp_ad_data)
