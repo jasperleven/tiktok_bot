@@ -307,7 +307,6 @@ class CampaignStates(StatesGroup):
     bid_amount         = State()
     pixel_search       = State()
     pixel_select       = State()
-    lead_destination   = State()
     pixel_event        = State()
     gender             = State()
     age_groups         = State()
@@ -315,7 +314,6 @@ class CampaignStates(StatesGroup):
     video_upload       = State()
     ad_text            = State()
     ad_url             = State()
-    call_to_action     = State()
 
 
 # ─── Утилиты ─────────────────────────────────────────────────────────────────
@@ -1313,29 +1311,6 @@ async def got_pixel_select(callback: types.CallbackQuery, state: FSMContext):
     pixel_id = callback.data.replace("pixel_", "")
     await state.update_data(pixel_id=pixel_id)
     await callback.message.answer(f"✅ Пиксель: {pixel_id}")
-    await show_lead_destination(callback.message, state)
-    await callback.answer()
-
-
-async def show_lead_destination(m, state: FSMContext):
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🌐 На сайт (внешняя форма/лендинг)", callback_data="dest_WEBSITE")],
-        [InlineKeyboardButton(text="📱 Мгновенная форма TikTok", callback_data="dest_INSTANT_FORM")],
-    ])
-    await m.answer(
-        "Шаг 13а.1 — Куда ведём лид?\n"
-        "(как в самом TikTok Ads Manager: сначала место назначения, потом событие оптимизации внутри него)",
-        reply_markup=keyboard
-    )
-    await state.set_state(CampaignStates.lead_destination)
-
-
-@dp.callback_query(F.data.startswith("dest_"))
-async def got_lead_destination(callback: types.CallbackQuery, state: FSMContext):
-    dest = callback.data.replace("dest_", "")
-    await state.update_data(lead_destination=dest)
-    label = "🌐 На сайт" if dest == "WEBSITE" else "📱 Мгновенная форма TikTok"
-    await callback.message.answer(f"✅ Назначение: {label}")
     await show_pixel_event(callback.message, state)
     await callback.answer()
 
@@ -1412,8 +1387,6 @@ async def show_pixel_event(m, state: FSMContext):
     data = await state.get_data()
     pixel_id = data.get("pixel_id")
     check_advertiser_id = (data.get("selected_advertisers") or [None])[0]
-    is_website_dest = data.get("lead_destination") == "WEBSITE"
-    form_label = "📋 Заполнение формы (Submit form)" if is_website_dest else "📋 Заполненная форма (в TikTok)"
 
     rows = []
     real_events = None
@@ -1422,8 +1395,6 @@ async def show_pixel_event(m, state: FSMContext):
 
     if real_events:
         for key, label in real_events:
-            if key == "FORM":
-                label = form_label
             rows.append([InlineKeyboardButton(text=label, callback_data=f"event_{key}")])
         # Запоминаем ИМЕННО ЭТОТ список — при клике сверяемся с ним же, без
         # повторного живого запроса к API. Раньше вторая (повторная) проверка
@@ -1439,7 +1410,7 @@ async def show_pixel_event(m, state: FSMContext):
         # показываем статичный список, но помечаем, что список НЕ проверен —
         # got_pixel_event тогда обязан сходить за живой проверкой перед сохранением.
         rows = [
-            [InlineKeyboardButton(text=form_label, callback_data="event_FORM")],
+            [InlineKeyboardButton(text="📋 Заполненная форма (в TikTok)", callback_data="event_FORM")],
             [InlineKeyboardButton(text="🌐 Заявка на сайте", callback_data="event_SUBMIT_APPLICATION")],
             [InlineKeyboardButton(text="🛒 Покупка", callback_data="event_SHOPPING")],
             [InlineKeyboardButton(text="📝 Регистрация", callback_data="event_ON_WEB_REGISTER")],
@@ -1794,7 +1765,6 @@ async def add_more_group(message: types.Message, state: FSMContext):
         "ad_url": data.get("ad_url", ""),
         "pixel_id": data.get("pixel_id"),
         "optimization_event": data.get("optimization_event"),
-        "lead_destination": data.get("lead_destination"),
         "placement_type": data.get("placement_type"),
         "placements": data.get("placements"),
         "geo": data.get("geo"),
@@ -1862,7 +1832,6 @@ async def finish_groups(message: types.Message, state: FSMContext):
         "ad_url": data.get("ad_url", ""),
         "pixel_id": data.get("pixel_id"),
         "optimization_event": data.get("optimization_event"),
-        "lead_destination": data.get("lead_destination"),
         "placement_type": data.get("placement_type"),
         "placements": data.get("placements"),
         "geo": data.get("geo"),
@@ -1872,34 +1841,9 @@ async def finish_groups(message: types.Message, state: FSMContext):
         "bid_amount": data.get("bid_amount"),
     })
     await state.update_data(groups=groups)
-    await show_cta_step(message, state)
-
-
-async def show_cta_step(m, state: FSMContext):
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Подробнее (Learn More)", callback_data="cta_LEARN_MORE")],
-        [InlineKeyboardButton(text="Зарегистрироваться (Sign Up)", callback_data="cta_SIGN_UP")],
-        [InlineKeyboardButton(text="Купить (Shop Now)", callback_data="cta_SHOP_NOW")],
-        [InlineKeyboardButton(text="Оставить заявку (Apply Now)", callback_data="cta_APPLY_NOW")],
-        [InlineKeyboardButton(text="Связаться (Contact Us)", callback_data="cta_CONTACT_US")],
-        [InlineKeyboardButton(text="Скачать (Download)", callback_data="cta_DOWNLOAD_NOW")],
-        [InlineKeyboardButton(text="➡️ Далее (оставить Подробнее)", callback_data="cta_LEARN_MORE")],
-    ])
-    await m.answer("Шаг 16б — Призыв к действию (Call to Action) на объявлении:", reply_markup=keyboard)
-    await state.set_state(CampaignStates.call_to_action)
-
-
-@dp.callback_query(F.data.startswith("cta_"))
-async def got_cta(callback: types.CallbackQuery, state: FSMContext):
-    cta = callback.data.replace("cta_", "")
-    await state.update_data(call_to_action=cta)
-    await callback.message.answer(f"✅ Призыв к действию: {cta}")
-    await callback.answer()
-
     data = await state.get_data()
     selected = data.get("selected_advertisers", [])
     names = [ALL_ADVERTISERS.get(a, a) for a in selected]
-    groups = data.get("groups", [])
     total_videos = sum(len(g["videos"]) for g in groups)
     groups_summary = "\n".join(f"  • {g['adgroup_name']}: {len(g['videos'])} креатив(ов)" for g in groups)
     text = (
@@ -1909,11 +1853,10 @@ async def got_cta(callback: types.CallbackQuery, state: FSMContext):
         f"💰 Бюджет: {data['budget']} USD\n"
         f"📦 Групп объявлений: {len(groups)}\n{groups_summary}\n"
         f"🎬 Всего видео: {total_videos}\n"
-        f"📢 CTA: {cta}\n"
         f"📁 Кабинетов: {len(selected)}\n\n" +
         "\n".join(f"• {n}" for n in names)
     )
-    await callback.message.answer(text, reply_markup=build_confirm_keyboard(selected, get_user_advertisers(callback.from_user.id)))
+    await message.answer(text, reply_markup=build_confirm_keyboard(selected, get_user_advertisers(message.from_user.id)))
 
 
 @dp.callback_query(F.data == "create_campaign")
@@ -1992,12 +1935,13 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
             with open(video_path, "rb") as f:
                 video_bytes = f.read()
             md5_hash = hashlib.md5(video_bytes).hexdigest()
+            upload_filename = sanitize_upload_filename(original_filename, advertiser_id, video_bytes)
             form = aiohttp.FormData()
             form.add_field("advertiser_id", advertiser_id)
             form.add_field("upload_type", "UPLOAD_BY_FILE")
             form.add_field("video_signature", md5_hash)
             form.add_field("video_file", video_bytes,
-                filename=sanitize_upload_filename(original_filename, advertiser_id, video_bytes),
+                filename=upload_filename,
                 content_type="video/mp4")
             upload_resp = await session.post(
                 f"{base_url}/file/video/ad/upload/",
@@ -2006,6 +1950,24 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
             )
             upload_data = await upload_resp.json()
             await log_api("VIDEO UPLOAD", {"advertiser_id": advertiser_id}, upload_data)
+            if upload_data.get("code") != 0 and "duplicat" in (upload_data.get("message") or "").lower():
+                # Имя уже занято другим (по содержимому) видео в этом кабинете —
+                # добавляем короткий суффикс от хэша содержимого и пробуем ещё раз,
+                # чтобы не проваливать создание кампании целиком из-за коллизии имени.
+                name_part, ext = os.path.splitext(upload_filename)
+                retry_filename = f"{name_part}_{md5_hash[:6]}{ext}"
+                form2 = aiohttp.FormData()
+                form2.add_field("advertiser_id", advertiser_id)
+                form2.add_field("upload_type", "UPLOAD_BY_FILE")
+                form2.add_field("video_signature", md5_hash)
+                form2.add_field("video_file", video_bytes, filename=retry_filename, content_type="video/mp4")
+                upload_resp = await session.post(
+                    f"{base_url}/file/video/ad/upload/",
+                    data=form2,
+                    headers={"Access-Token": get_token_for_advertiser(advertiser_id)}
+                )
+                upload_data = await upload_resp.json()
+                await log_api("VIDEO UPLOAD RETRY", {"advertiser_id": advertiser_id, "filename": retry_filename}, upload_data)
             if upload_data.get("code") != 0:
                 return False, f"Ошибка загрузки видео: {upload_data.get('message')}"
             d = upload_data["data"]
@@ -2099,7 +2061,13 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                     "ad_url": data.get("ad_url", ""),
                     "pixel_id": data.get("pixel_id"),
                     "optimization_event": data.get("optimization_event"),
-                    "lead_destination": data.get("lead_destination"),
+                    "placement_type": data.get("placement_type"),
+                    "placements": data.get("placements"),
+                    "geo": data.get("geo"),
+                    "schedule_start": data.get("schedule_start"),
+                    "schedule_end": data.get("schedule_end"),
+                    "bid_type": data.get("bid_type"),
+                    "bid_amount": data.get("bid_amount"),
                 }]
 
                 total_ad_ids = []
@@ -2114,14 +2082,7 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                     # с настроек первой группы (fallback через data.get(...)).
                     group_pixel_id = group.get("pixel_id") or data.get("pixel_id")
                     group_event = group.get("optimization_event") or data.get("optimization_event")
-                    group_lead_destination = group.get("lead_destination") or data.get("lead_destination")
-                    # Основной признак — явный выбор "Куда ведём лид?" (шаг 13а.1).
-                    # Fallback на старую логику по событию — для обратной совместимости
-                    # со старыми сохранёнными состояниями без lead_destination.
-                    is_website_lead = (
-                        group_lead_destination == "WEBSITE"
-                        or (not group_lead_destination and group_event in ("SUBMIT_APPLICATION", "ON_WEB_ORDER"))
-                    )
+                    is_website_lead = group_event == "SUBMIT_APPLICATION"
                     group_placement_type = group.get("placement_type") or data.get("placement_type", "PLACEMENT_TYPE_NORMAL")
                     group_placements = group.get("placements") or data.get("placements", ["PLACEMENT_TIKTOK"])
                     group_geo = group.get("geo") or data.get("geo")
@@ -2207,12 +2168,13 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                         with open(vid_path, "rb") as f:
                             vbytes = f.read()
                         vmd5 = hashlib.md5(vbytes).hexdigest()
+                        v_upload_filename = sanitize_upload_filename(vid_item.get("original_filename"), advertiser_id, vbytes)
                         vform = aiohttp.FormData()
                         vform.add_field("advertiser_id", advertiser_id)
                         vform.add_field("upload_type", "UPLOAD_BY_FILE")
                         vform.add_field("video_signature", vmd5)
                         vform.add_field("video_file", vbytes,
-                            filename=sanitize_upload_filename(vid_item.get("original_filename"), advertiser_id, vbytes),
+                            filename=v_upload_filename,
                             content_type="video/mp4")
                         vup_resp = await session.post(
                             f"{base_url}/file/video/ad/upload/",
@@ -2221,6 +2183,23 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                         )
                         vup_data = await vup_resp.json()
                         await log_api(f"VIDEO UPLOAD (group {group_name})", {"advertiser_id": advertiser_id, "video_index": i}, vup_data)
+                        if vup_data.get("code") != 0 and "duplicat" in (vup_data.get("message") or "").lower():
+                            # Коллизия имени с другим (по содержимому) видео — повторяем
+                            # с уникальным суффиксом, чтобы не проваливать всю группу
+                            name_part, ext = os.path.splitext(v_upload_filename)
+                            v_retry_filename = f"{name_part}_{vmd5[:6]}{ext}"
+                            vform2 = aiohttp.FormData()
+                            vform2.add_field("advertiser_id", advertiser_id)
+                            vform2.add_field("upload_type", "UPLOAD_BY_FILE")
+                            vform2.add_field("video_signature", vmd5)
+                            vform2.add_field("video_file", vbytes, filename=v_retry_filename, content_type="video/mp4")
+                            vup_resp = await session.post(
+                                f"{base_url}/file/video/ad/upload/",
+                                data=vform2,
+                                headers={"Access-Token": get_token_for_advertiser(advertiser_id)}
+                            )
+                            vup_data = await vup_resp.json()
+                            await log_api(f"VIDEO UPLOAD RETRY (group {group_name})", {"advertiser_id": advertiser_id, "video_index": i, "filename": v_retry_filename}, vup_data)
                         if vup_data.get("code") != 0:
                             group_errors.append(f"{group_name} #{i+1}: загрузка видео — {vup_data.get('message')}")
                             continue
@@ -2279,7 +2258,7 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                             "creative_list": [{"creative_info": ci}],
                             "ad_text_list": [{"ad_text": vid_item.get("ad_text", "")}],
                             "landing_page_url_list": [{"landing_page_url": group_ad_url}] if group_ad_url else [],
-                            "call_to_action_list": [{"call_to_action": data.get("call_to_action", "LEARN_MORE")}],
+                            "call_to_action_list": [{"call_to_action": "LEARN_MORE"}],
                         }
                         sp_ad_resp = await session.post(f"{base_url}/smart_plus/ad/create/", json=sp_ad_payload, headers=headers)
                         sp_ad_data = await sp_ad_resp.json()
@@ -2375,7 +2354,7 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                     "ad_text": data.get("ad_text", ""),
                     "video_id": video_id,
                     "landing_page_url": data.get("ad_url", ""),
-                    "call_to_action": data.get("call_to_action", "LEARN_MORE"),
+                    "call_to_action": "LEARN_MORE",
                     "ad_format": "SINGLE_VIDEO",
                 }
                 if identity:
