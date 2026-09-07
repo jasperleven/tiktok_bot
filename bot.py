@@ -9,7 +9,7 @@ import hashlib
 import time
 import calendar
 import datetime
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, parse_qsl
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.client.session.aiohttp import AiohttpSession
@@ -2444,6 +2444,18 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                             "landing_page_url_list": [{"landing_page_url": group_ad_url}] if group_ad_url else [],
                             "call_to_action_list": [{"call_to_action": data.get("call_to_action", "LEARN_MORE")}],
                         }
+                        # При ручном создании TikTok дублирует параметры ссылки отдельным
+                        # структурированным полем ad_configuration.utm_params — без него
+                        # интерфейс показывает "No URL parameters" и подстановка макросов
+                        # (__CLICKID__, __CAMPAIGN_ID__ и т.д.) может работать некорректно.
+                        # Подтверждено сравнением реального объявления, созданного вручную.
+                        if group_ad_url:
+                            parsed_url = urlparse(group_ad_url)
+                            query_params = parse_qsl(parsed_url.query, keep_blank_values=True)
+                            if query_params:
+                                sp_ad_payload["ad_configuration"] = {
+                                    "utm_params": [{"key": k, "value": v} for k, v in query_params]
+                                }
                         sp_ad_resp = await session.post(f"{base_url}/smart_plus/ad/create/", json=sp_ad_payload, headers=headers)
                         sp_ad_data = await sp_ad_resp.json()
                         await log_api("SMART+ AD CREATE", sp_ad_payload, sp_ad_data)
