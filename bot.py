@@ -2458,7 +2458,24 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                         # creative_list формально содержит несколько элементов). Подтверждено
                         # прямым сравнением ad_configuration рабочего объявления, созданного
                         # вручную, против нашего.
-                        ad_config = {"creative_auto_add_toggle": True}
+                        #
+                        # НО одного этого флага оказалось недостаточно: "No data" всё ещё
+                        # воспроизводился. Сравнение ad_configuration рабочего ("auto")
+                        # объявления показало, что TikTok также требует identity_type/
+                        # identity_id/identity_authorized_bc_id И product_info_enabled:
+                        # "NON_CATALOG" на уровне ad_configuration (не только внутри
+                        # creative_info у каждого креатива) — иначе объявление создаётся в
+                        # "урезанном" режиме без полноценной привязки нескольких креативов.
+                        # Подтверждено 2026-09-08 сравнением smart_plus/ad/get/ рабочей
+                        # группы "auto" (adgroup_id 1875249656764625) против бот-объявления.
+                        ad_config = {
+                            "creative_auto_add_toggle": True,
+                            "identity_type": identity["identity_type"],
+                            "identity_id": identity["identity_id"],
+                            "product_info_enabled": "NON_CATALOG",
+                        }
+                        if identity.get("identity_authorized_bc_id"):
+                            ad_config["identity_authorized_bc_id"] = identity["identity_authorized_bc_id"]
                         # При ручном создании TikTok дублирует параметры ссылки отдельным
                         # структурированным полем ad_configuration.utm_params — без него
                         # интерфейс показывает "No URL parameters" и подстановка макросов
