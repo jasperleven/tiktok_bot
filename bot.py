@@ -2227,8 +2227,10 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                         continue  # эта группа не создалась — пробуем следующие, кампанию не удаляем
                     adgroup_id = sp_adgroup_data["data"]["adgroup_id"]
 
+                    group_creative_list = []
+                    group_ad_texts_seen = []
                     for i, vid_item in enumerate(group_videos):
-                        # Загружаем видео для этого объявления
+                        # Загружаем видео для этого креатива
                         vid_path = vid_item.get("video_path") or video_path
                         with open(vid_path, "rb") as f:
                             vbytes = f.read()
@@ -2316,12 +2318,21 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                         if identity.get("ads_only_mode") or identity.get("identity_type") == "CUSTOMIZED_USER":
                             ci["dark_post_status"] = "ON"
 
+                        group_creative_list.append({"creative_info": ci})
+                        ad_text = vid_item.get("ad_text", "")
+                        if ad_text and ad_text not in group_ad_texts_seen:
+                            group_ad_texts_seen.append(ad_text)
+
+                    # Одно объявление на группу, со ВСЕМИ загруженными креативами внутри —
+                    # так же, как при ручном создании в TikTok Ads Manager (несколько
+                    # видео как варианты одного объявления, а не отдельные объявления)
+                    if group_creative_list:
                         sp_ad_payload = {
                             "advertiser_id": advertiser_id,
                             "adgroup_id": adgroup_id,
-                            "ad_name": f"{group_name} #{i+1}",
-                            "creative_list": [{"creative_info": ci}],
-                            "ad_text_list": [{"ad_text": vid_item.get("ad_text", "")}],
+                            "ad_name": group_name,
+                            "creative_list": group_creative_list,
+                            "ad_text_list": [{"ad_text": t} for t in group_ad_texts_seen] or [{"ad_text": ""}],
                             "landing_page_url_list": [{"landing_page_url": group_ad_url}] if group_ad_url else [],
                             "call_to_action_list": [{"call_to_action": data.get("call_to_action", "LEARN_MORE")}],
                         }
@@ -2331,7 +2342,7 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                         if sp_ad_data.get("code") == 0:
                             total_ad_ids.append(sp_ad_data["data"]["smart_plus_ad_id"])
                         else:
-                            group_errors.append(f"{group_name} #{i+1}: {sp_ad_data.get('message')}")
+                            group_errors.append(f"{group_name}: {sp_ad_data.get('message')}")
 
                 if not total_ad_ids:
                     # Ни одной группы/объявления не создалось — удаляем пустую кампанию
