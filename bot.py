@@ -2138,25 +2138,27 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
             d = upload_data["data"]
             item = d[0] if isinstance(d, list) else d
             video_id = item["video_id"]
-            video_cover_url = item.get("video_cover_url")
 
-            # Если обложки нет — ищем через filtering
-            if not video_cover_url:
-                for _ in range(6):
-                    search_resp = await session.get(
-                        f"{base_url}/file/video/ad/search/",
-                        params={
-                            "advertiser_id": advertiser_id,
-                            "filtering": f'{{"video_ids":["{video_id}"]}}'
-                        },
-                        headers=headers
-                    )
-                    search_data = await search_resp.json()
-                    videos = search_data.get("data", {}).get("list", [])
-                    if videos and videos[0].get("video_cover_url"):
-                        video_cover_url = videos[0]["video_cover_url"]
-                        break
-                    await asyncio.sleep(10)
+            # Не доверяем video_cover_url из немедленного ответа — превью TikTok
+            # генерирует асинхронно, слишком ранняя ссылка даёт битую обложку.
+            # Всегда перепроверяем через video/ad/search с задержкой.
+            video_cover_url = None
+            await asyncio.sleep(5)
+            for _ in range(8):
+                search_resp = await session.get(
+                    f"{base_url}/file/video/ad/search/",
+                    params={
+                        "advertiser_id": advertiser_id,
+                        "filtering": f'{{"video_ids":["{video_id}"]}}'
+                    },
+                    headers=headers
+                )
+                search_data = await search_resp.json()
+                videos = search_data.get("data", {}).get("list", [])
+                if videos and videos[0].get("video_cover_url"):
+                    video_cover_url = videos[0]["video_cover_url"]
+                    break
+                await asyncio.sleep(10)
 
             # Загружаем обложку
             web_uri = None
@@ -2380,21 +2382,27 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                             continue
                         vd = vup_data["data"]
                         vid_id = vd[0]["video_id"] if isinstance(vd, list) else vd["video_id"]
-                        vid_cover_url = vd[0].get("video_cover_url") if isinstance(vd, list) else vd.get("video_cover_url")
+
+                        # Не доверяем video_cover_url из немедленного ответа — превью TikTok
+                        # генерирует асинхронно, и если взять ссылку слишком рано, обложка
+                        # получается битой (подтверждено: у объявлений через бота обложки
+                        # выходили полосатыми/повреждёнными). Всегда перепроверяем через
+                        # video/ad/search с небольшой задержкой перед первой попыткой.
+                        vid_cover_url = None
+                        await asyncio.sleep(5)
+                        for _ in range(8):
+                            sr = await session.get(f"{base_url}/file/video/ad/search/",
+                                params={"advertiser_id": advertiser_id, "filtering": f'{{"video_ids":["{vid_id}"]}}'},
+                                headers=headers)
+                            sd = await sr.json()
+                            vlist = sd.get("data", {}).get("list", [])
+                            if vlist and vlist[0].get("video_cover_url"):
+                                vid_cover_url = vlist[0]["video_cover_url"]
+                                break
+                            await asyncio.sleep(10)
 
                         # Ищем обложку
                         vid_web_uri = None
-                        if not vid_cover_url:
-                            for _ in range(6):
-                                sr = await session.get(f"{base_url}/file/video/ad/search/",
-                                    params={"advertiser_id": advertiser_id, "filtering": f'{{"video_ids":["{vid_id}"]}}'},
-                                    headers=headers)
-                                sd = await sr.json()
-                                vlist = sd.get("data", {}).get("list", [])
-                                if vlist and vlist[0].get("video_cover_url"):
-                                    vid_cover_url = vlist[0]["video_cover_url"]
-                                    break
-                                await asyncio.sleep(10)
 
                         if vid_cover_url:
                             cr = await session.post(f"{base_url}/file/image/ad/upload/",
