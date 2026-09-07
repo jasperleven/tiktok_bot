@@ -7,6 +7,8 @@ import aiohttp
 import tempfile
 import hashlib
 import time
+import calendar
+import datetime
 from urllib.parse import urlparse, parse_qs
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from aiogram import Bot, Dispatcher, types, F
@@ -248,6 +250,52 @@ COUNTRIES = {
     "🇬🇧 Великобритания": 2635167,
     "🇵🇱 Польша": 798544,
 }
+DEFAULT_GEO = COUNTRIES["🇧🇾 Беларусь"]
+
+MONTHS_RU = ["", "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
+             "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"]
+WEEKDAYS_RU = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+
+
+def build_calendar_keyboard(year, month, field):
+    """field: 'start' или 'end' — для какого поля даты строим календарь
+    (используется в callback_data, чтобы отличать шаг 10 от шага 11)."""
+    cal = calendar.Calendar(firstweekday=0)
+    weeks = cal.monthdayscalendar(year, month)
+    rows = [[InlineKeyboardButton(text=w, callback_data="cal_noop") for w in WEEKDAYS_RU]]
+    for week in weeks:
+        row = []
+        for day in week:
+            if day == 0:
+                row.append(InlineKeyboardButton(text=" ", callback_data="cal_noop"))
+            else:
+                row.append(InlineKeyboardButton(
+                    text=str(day),
+                    callback_data=f"caldate_{field}_{year}-{month:02d}-{day:02d}"
+                ))
+        rows.append(row)
+
+    prev_month = month - 1 if month > 1 else 12
+    prev_year = year if month > 1 else year - 1
+    next_month = month + 1 if month < 12 else 1
+    next_year = year if month < 12 else year + 1
+
+    rows.append([
+        InlineKeyboardButton(text="◀️", callback_data=f"calnav_{field}_{prev_year}-{prev_month:02d}"),
+        InlineKeyboardButton(text=f"{MONTHS_RU[month]} {year}", callback_data="cal_noop"),
+        InlineKeyboardButton(text="▶️", callback_data=f"calnav_{field}_{next_year}-{next_month:02d}"),
+    ])
+    if field == "end":
+        rows.append([InlineKeyboardButton(text="♾ Без даты окончания", callback_data="cal_no_end")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def build_time_keyboard(field, date_str):
+    times = ["09:00", "10:00", "12:00", "15:00", "18:00", "21:00", "00:00"]
+    rows = [[InlineKeyboardButton(text=t, callback_data=f"caltime_{field}_{date_str}_{t}")] for t in times]
+    rows.append([InlineKeyboardButton(text="✍️ Ввести время вручную", callback_data=f"caltimemanual_{field}_{date_str}")])
+    rows.append([InlineKeyboardButton(text="◀️ К выбору даты", callback_data=f"calback_{field}_{date_str[:7]}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 ADGROUP_OPT_MAP = {
     "REACH":            ("REACH",            "CPM",  "WEBSITE"),
@@ -1163,46 +1211,106 @@ async def got_placement(message: types.Message, state: FSMContext):
     else:
         await message.answer("Выбери из списка 👇")
         return
-    await state.set_state(CampaignStates.geo)
-    keyboard = ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text=k)] for k in COUNTRIES.keys()] + [[KeyboardButton(text="◀️ Назад")]],
-        resize_keyboard=True, one_time_keyboard=True
-    )
-    await message.answer("Шаг 9/17 — Гео:", reply_markup=keyboard)
-
-
-@dp.message(CampaignStates.geo, F.text != "◀️ Назад")
-async def got_geo(message: types.Message, state: FSMContext):
-    if message.text not in COUNTRIES:
-        await message.answer("Выбери страну из списка 👇")
-        return
-    await state.update_data(geo=COUNTRIES[message.text])
+    # Гео по умолчанию — Беларусь, отдельный шаг выбора страны убран
+    await state.update_data(geo=DEFAULT_GEO)
     await state.set_state(CampaignStates.schedule_start)
-    await message.answer(
-        "Шаг 10/17 — Дата начала\nФормат: `YYYY-MM-DD HH:MM:SS`\nНапример: `2026-07-20 10:00:00`",
-        reply_markup=ReplyKeyboardRemove()
+    now = datetime.datetime.now()
+    await message.answer("Шаг 9/17 — Дата начала:", reply_markup=ReplyKeyboardRemove())
+    await message.answer("Выбери день:", reply_markup=build_calendar_keyboard(now.year, now.month, "start"))
+
+
+@dp.callback_query(F.data == "cal_noop")
+async def cal_noop(callback: types.CallbackQuery):
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("calnav_"))
+async def cal_navigate(callback: types.CallbackQuery, state: FSMContext):
+    _, field, ym = callback.data.split("_", 2)
+    year, month = map(int, ym.split("-"))
+    try:
+        await callback.message.edit_reply_markup(reply_markup=build_calendar_keyboard(year, month, field))
+    except Exception:
+        pass
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("calback_"))
+async def cal_back_to_calendar(callback: types.CallbackQuery, state: FSMContext):
+    _, field, ym = callback.data.split("_", 2)
+    year, month = map(int, ym.split("-"))
+    await callback.message.answer("Выбери день:", reply_markup=build_calendar_keyboard(year, month, field))
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("caldate_"))
+async def cal_pick_date(callback: types.CallbackQuery, state: FSMContext):
+    _, field, date_str = callback.data.split("_", 2)
+    await callback.message.answer(f"📅 Дата: {date_str}\nВыбери время:", reply_markup=build_time_keyboard(field, date_str))
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("caltime_"))
+async def cal_pick_time(callback: types.CallbackQuery, state: FSMContext):
+    _, field, date_str, time_str = callback.data.split("_", 3)
+    full_dt = f"{date_str} {time_str}:00"
+    await callback.answer()
+    await _apply_calendar_datetime(callback.message, state, field, full_dt)
+
+
+@dp.callback_query(F.data.startswith("caltimemanual_"))
+async def cal_time_manual(callback: types.CallbackQuery, state: FSMContext):
+    _, field, date_str = callback.data.split("_", 2)
+    await state.update_data(cal_pending_field=field, cal_pending_date=date_str)
+    await callback.message.answer(
+        f"📅 Дата: {date_str}\nВведи время в формате `HH:MM` (например `14:30`):",
+        parse_mode="Markdown"
     )
+    await callback.answer()
 
 
-@dp.message(CampaignStates.schedule_start, F.text != "◀️ Назад")
-async def got_schedule_start(message: types.Message, state: FSMContext):
-    await state.update_data(schedule_start=message.text)
-    await state.set_state(CampaignStates.schedule_end)
-    keyboard = ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="♾ Без даты окончания")], [KeyboardButton(text="◀️ Назад")]],
-        resize_keyboard=True, one_time_keyboard=True
-    )
-    await message.answer(
-        "Шаг 11/17 — Дата окончания\nФормат: `YYYY-MM-DD HH:MM:SS`\nИли кнопку:",
-        reply_markup=keyboard
-    )
-
-
-@dp.message(CampaignStates.schedule_end, F.text != "◀️ Назад")
-async def got_schedule_end(message: types.Message, state: FSMContext):
-    end = None if message.text == "♾ Без даты окончания" else message.text
-    await state.update_data(schedule_end=end)
+@dp.message(CampaignStates.schedule_start, F.text.regexp(r"^\d{1,2}:\d{2}$"))
+@dp.message(CampaignStates.schedule_end, F.text.regexp(r"^\d{1,2}:\d{2}$"))
+async def got_manual_time(message: types.Message, state: FSMContext):
     data = await state.get_data()
+    field = data.get("cal_pending_field")
+    date_str = data.get("cal_pending_date")
+    if not field or not date_str:
+        return  # не в процессе ручного ввода времени — пропускаем
+    hh, mm = message.text.split(":")
+    if not (0 <= int(hh) <= 23 and 0 <= int(mm) <= 59):
+        await message.answer("Некорректное время, попробуй ещё раз в формате `HH:MM`", parse_mode="Markdown")
+        return
+    full_dt = f"{date_str} {int(hh):02d}:{int(mm):02d}:00"
+    await state.update_data(cal_pending_field=None, cal_pending_date=None)
+    await _apply_calendar_datetime(message, state, field, full_dt)
+
+
+async def _apply_calendar_datetime(m, state: FSMContext, field, full_dt):
+    """Сохраняет выбранную дату/время и переводит на следующий шаг сценария."""
+    if field == "start":
+        await state.update_data(schedule_start=full_dt)
+        await m.answer(f"✅ Дата начала: {full_dt}")
+        now = datetime.datetime.now()
+        await m.answer(
+            "Шаг 10/17 — Дата окончания (или «Без даты окончания»):",
+            reply_markup=build_calendar_keyboard(now.year, now.month, "end")
+        )
+    else:
+        await state.update_data(schedule_end=full_dt)
+        await m.answer(f"✅ Дата окончания: {full_dt}")
+        await _finish_schedule_step(m, state)
+
+
+@dp.callback_query(F.data == "cal_no_end")
+async def cal_no_end(callback: types.CallbackQuery, state: FSMContext):
+    await state.update_data(schedule_end=None)
+    await callback.message.answer("✅ Без даты окончания")
+    await callback.answer()
+    await _finish_schedule_step(callback.message, state)
+
+
+async def _finish_schedule_step(m, state: FSMContext):
     # BID_TYPE_CUSTOM валиден для Smart+ adgroup по официальной схеме API (SmartBidType),
     # поэтому шаг выбора ставки теперь одинаковый для всех целей, включая LEAD_GENERATION
     await state.set_state(CampaignStates.bid_type)
@@ -1214,7 +1322,7 @@ async def got_schedule_end(message: types.Message, state: FSMContext):
         ],
         resize_keyboard=True, one_time_keyboard=True
     )
-    await message.answer("Шаг 12/17 — Ставка:", reply_markup=keyboard)
+    await m.answer("Шаг 12/17 — Ставка:", reply_markup=keyboard)
 
 
 async def show_pixel_list(message_or_callback, state: FSMContext):
@@ -2518,25 +2626,25 @@ async def show_step(state, msg_or_cb, step_name):
         await m.answer("Шаг 8/17 — Плейсменты:", reply_markup=keyboard)
 
     elif step_name == "geo":
-        await state.set_state(CampaignStates.geo)
-        keyboard = ReplyKeyboardMarkup(
-            keyboard=[[KeyboardButton(text=k)] for k in COUNTRIES.keys()] + [[KeyboardButton(text="◀️ Назад")]],
-            resize_keyboard=True, one_time_keyboard=True
-        )
-        await m.answer("Шаг 9/17 — Гео:", reply_markup=keyboard)
+        # Отдельный шаг выбора гео убран (по умолчанию Беларусь) — "Назад" сюда
+        # ведёт сразу к выбору даты начала, как и обычный переход вперёд.
+        await state.update_data(geo=DEFAULT_GEO)
+        await state.set_state(CampaignStates.schedule_start)
+        now = datetime.datetime.now()
+        await m.answer("Шаг 9/17 — Дата начала:")
+        await m.answer("Выбери день:", reply_markup=build_calendar_keyboard(now.year, now.month, "start"))
 
     elif step_name == "schedule_start":
         await state.set_state(CampaignStates.schedule_start)
-        kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="◀️ Назад")]], resize_keyboard=True)
-        await m.answer("Шаг 10/17 — Дата начала\nФормат: YYYY-MM-DD HH:MM:SS", reply_markup=kb)
+        now = datetime.datetime.now()
+        await m.answer("Шаг 9/17 — Дата начала:")
+        await m.answer("Выбери день:", reply_markup=build_calendar_keyboard(now.year, now.month, "start"))
 
     elif step_name == "schedule_end":
         await state.set_state(CampaignStates.schedule_end)
-        keyboard = ReplyKeyboardMarkup(
-            keyboard=[[KeyboardButton(text="♾ Без даты окончания")], [KeyboardButton(text="◀️ Назад")]],
-            resize_keyboard=True, one_time_keyboard=True
-        )
-        await m.answer("Шаг 11/17 — Дата окончания:", reply_markup=keyboard)
+        now = datetime.datetime.now()
+        await m.answer("Шаг 10/17 — Дата окончания:")
+        await m.answer("Выбери день:", reply_markup=build_calendar_keyboard(now.year, now.month, "end"))
 
     elif step_name == "bid_type":
         await state.set_state(CampaignStates.bid_type)
@@ -2577,7 +2685,7 @@ BACK_MAP = {
     CampaignStates.adgroup_name: "budget_amount",
     CampaignStates.placement: "adgroup_name",
     CampaignStates.geo: "placement",
-    CampaignStates.schedule_start: "geo",
+    CampaignStates.schedule_start: "placement",
     CampaignStates.schedule_end: "schedule_start",
     CampaignStates.bid_type: "schedule_end",
     CampaignStates.bid_amount: "bid_type",
