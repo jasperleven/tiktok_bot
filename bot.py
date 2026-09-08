@@ -2418,7 +2418,8 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
 
                         ci = {
                             "ad_format": "SINGLE_VIDEO",
-                            "video_info": {"video_id": vid_id},
+                            "material_name": v_upload_filename,
+                            "video_info": {"video_id": vid_id, "file_name": v_upload_filename},
                             "image_info": [{"web_uri": vid_web_uri}],
                             "identity_type": identity["identity_type"],
                             "identity_id": identity["identity_id"],
