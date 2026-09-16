@@ -1407,7 +1407,7 @@ async def got_bid_amount(message: types.Message, state: FSMContext):
 async def skip_pixel(message: types.Message, state: FSMContext):
     await state.update_data(pixel_id=None)
     await state.set_state(CampaignStates.video_upload)
-    await message.answer("Шаг 14/17 — Отправь видео файлом (при отправке нажать галочку «Отправить как файл»)")
+    await message.answer("Шаг 14/17 — Отправь видео файлом (при отправке нажать галочку «Отправить как файл»; можно выбрать сразу несколько файлов и отправить одним альбомом)")
 
 
 @dp.message(CampaignStates.pixel_search, F.text != "◀️ Назад")
@@ -1735,7 +1735,7 @@ async def got_content_settings(callback: types.CallbackQuery, state: FSMContext)
     if action == "done":
         await state.set_state(CampaignStates.video_upload)
         await callback.message.answer(
-            "Шаг 14/17 — Отправь видео файлом (при отправке нажать галочку «Отправить как файл»):",
+            "Шаг 14/17 — Отправь видео файлом (при отправке нажать галочку «Отправить как файл»; можно выбрать сразу несколько файлов и отправить одним альбомом):",
             reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="◀️ Назад")]], resize_keyboard=True)
         )
         await callback.answer()
@@ -1780,9 +1780,104 @@ async def cmd_restart(message: types.Message, state: FSMContext):
     await message.answer("🔄 Состояние сброшено. Начни заново с /newcampaign", reply_markup=ReplyKeyboardRemove())
 
 
-@dp.message(CampaignStates.video_upload, F.video | F.document)
+async def download_telegram_file(file_id, session):
+    """Скачивает файл из Telegram (по file_id) на диск, возвращает путь.
+    Вынесено в отдельную функцию, чтобы её можно было использовать и для
+    одиночной загрузки видео, и для пачечной (альбом/media_group)."""
+    import shutil
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4", dir="/tmp")
+    video_path = tmp.name
+    tmp.close()
+
+    resp = await session.get(
+        f"http://localhost:8081/bot{BOT_TOKEN}/getFile",
+        params={"file_id": file_id}
+    )
+    data = await resp.json()
+    if not data.get("ok"):
+        raise Exception(f"getFile error: {data.get('description')}")
+    file_path = data["result"]["file_path"]
+
+    # file_path — абсолютный путь ВНУТРИ контейнера (work-dir), а бот работает на хосте,
+    # где эта директория смонтирована как /root/telegram-bot-api-data
+    local_file = file_path.replace("/var/lib/telegram-bot-api", "/root/telegram-bot-api-data")
+    if os.path.exists(local_file):
+        shutil.copy2(local_file, video_path)
+    else:
+        raise Exception(f"Файл не найден: {local_file}")
+
+    return video_path
+
+
+# Буфер для пачечной загрузки видео (Telegram "альбом"): когда пользователь
+# выбирает и отправляет сразу несколько видео одним действием, Telegram
+# доставляет их боту как отдельные сообщения с общим media_group_id, но без
+# гарантии, что все части придут одним "куском" — они могут растянуться на
+# доли секунды. Debounce-таймер ждёт короткую паузу без новых сообщений в
+# группе перед тем, как считать альбом полностью полученным и обрабатывать
+# его целиком одним разом.
+_media_group_buffer: dict[str, list] = {}
+_media_group_timers: dict[str, asyncio.Task] = {}
+MEDIA_GROUP_DEBOUNCE_SECONDS = 1.5
+
+
+async def _finalize_media_group(media_group_id: str, message: types.Message, state: FSMContext):
+    await asyncio.sleep(MEDIA_GROUP_DEBOUNCE_SECONDS)
+    items = _media_group_buffer.pop(media_group_id, [])
+    _media_group_timers.pop(media_group_id, None)
+    if not items:
+        return
+
+    await message.answer(f"⏳ Скачиваю {len(items)} видео на сервер...")
+
+    data = await state.get_data()
+    videos = data.get("videos", [])
+    added = 0
+    errors = []
+    async with aiohttp.ClientSession() as session:
+        for file_id, original_filename in items:
+            try:
+                video_path = await download_telegram_file(file_id, session)
+                videos.append({
+                    "video_path": video_path,
+                    "ad_text": "",
+                    "original_filename": original_filename,
+                })
+                added += 1
+            except Exception as e:
+                errors.append(str(e))
+
+    if added == 0:
+        await message.answer(f"❌ Не удалось скачать ни одного видео из партии: {errors}\n/restart — начать заново")
+        return
+
+    await state.update_data(videos=videos, batch_pending_count=added)
+    await state.set_state(CampaignStates.ad_text)
+    keyboard = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="◀️ Назад")]], resize_keyboard=True)
+    err_note = f"\n⚠️ Не скачалось: {len(errors)} видео из партии." if errors else ""
+    await message.answer(
+        f"✅ {added} видео скачано (всего в кампании: {len(videos)}).{err_note}\n\n"
+        f"Введи текст объявления (до 100 символов) — он применится сразу ко всем {added} только что добавленным видео:",
+        reply_markup=keyboard
+    )
+
+
+@dp.message(CampaignStates.video_upload, F.media_group_id, F.video | F.document)
+async def got_campaign_video_batch(message: types.Message, state: FSMContext):
+    mgid = message.media_group_id
+    file_id = message.document.file_id if message.document else message.video.file_id
+    original_filename = message.document.file_name if message.document else None
+
+    _media_group_buffer.setdefault(mgid, []).append((file_id, original_filename))
+
+    existing_timer = _media_group_timers.get(mgid)
+    if existing_timer:
+        existing_timer.cancel()
+    _media_group_timers[mgid] = asyncio.create_task(_finalize_media_group(mgid, message, state))
+
+
+@dp.message(CampaignStates.video_upload, F.media_group_id.is_(None), F.video | F.document)
 async def got_campaign_video(message: types.Message, state: FSMContext):
-    import tempfile, shutil
     file_id = message.document.file_id if message.document else message.video.file_id
     # Оригинальное имя файла доступно только если видео отправлено как ФАЙЛ
     # (📎 → Файл), а не как сжатое видео — в последнем случае Telegram имени
@@ -1793,28 +1888,8 @@ async def got_campaign_video(message: types.Message, state: FSMContext):
     await message.answer("⏳ Скачиваю видео на сервер...")
 
     try:
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4", dir="/tmp")
-        video_path = tmp.name
-        tmp.close()
-
         async with aiohttp.ClientSession() as session:
-            # Получаем путь к файлу через локальный Bot API
-            resp = await session.get(
-                f"http://localhost:8081/bot{BOT_TOKEN}/getFile",
-                params={"file_id": file_id}
-            )
-            data = await resp.json()
-            if not data.get("ok"):
-                raise Exception(f"getFile error: {data.get('description')}")
-            file_path = data["result"]["file_path"]
-
-        # file_path — абсолютный путь ВНУТРИ контейнера (work-dir), а бот работает на хосте,
-        # где эта директория смонтирована как /root/telegram-bot-api-data
-        local_file = file_path.replace("/var/lib/telegram-bot-api", "/root/telegram-bot-api-data")
-        if os.path.exists(local_file):
-            shutil.copy2(local_file, video_path)
-        else:
-            raise Exception(f"Файл не найден: {local_file}")
+            video_path = await download_telegram_file(file_id, session)
 
         await state.update_data(video_path=video_path, original_filename=original_filename)
         await state.set_state(CampaignStates.ad_text)
@@ -1832,14 +1907,26 @@ async def got_campaign_video(message: types.Message, state: FSMContext):
 @dp.message(CampaignStates.ad_text, F.text != "◀️ Назад")
 async def got_ad_text(message: types.Message, state: FSMContext):
     data = await state.get_data()
-    # Сохраняем текущее видео + текст в список
     videos = data.get("videos", [])
-    videos.append({
-        "video_path": data.get("video_path"),
-        "ad_text": message.text[:100],
-        "original_filename": data.get("original_filename"),
-    })
-    await state.update_data(videos=videos, video_path=None, original_filename=None)
+    batch_pending_count = data.get("batch_pending_count")
+
+    if batch_pending_count:
+        # Пачечная загрузка: видео уже добавлены в список в _finalize_media_group,
+        # текст применяется сразу ко всем только что добавленным (последним N).
+        ad_text = message.text[:100]
+        for v in videos[-batch_pending_count:]:
+            v["ad_text"] = ad_text
+        await state.update_data(videos=videos, batch_pending_count=None)
+        added_count = batch_pending_count
+    else:
+        # Одиночная загрузка (старое поведение)
+        videos.append({
+            "video_path": data.get("video_path"),
+            "ad_text": message.text[:100],
+            "original_filename": data.get("original_filename"),
+        })
+        await state.update_data(videos=videos, video_path=None, original_filename=None)
+        added_count = 1
 
     keyboard = ReplyKeyboardMarkup(
         keyboard=[
@@ -1848,8 +1935,9 @@ async def got_ad_text(message: types.Message, state: FSMContext):
         ],
         resize_keyboard=True, one_time_keyboard=True
     )
+    label = f"{added_count} видео" if added_count > 1 else "Видео"
     await message.answer(
-        f"✅ Видео {len(videos)} добавлено с текстом.\n\nДобавить ещё видео или перейти к URL?",
+        f"✅ {label} добавлено с текстом (всего: {len(videos)}).\n\nДобавить ещё видео или перейти к URL?",
         reply_markup=keyboard
     )
     await state.set_state(CampaignStates.ad_url)
@@ -1946,7 +2034,7 @@ async def got_adgroup_name_reuse(message: types.Message, state: FSMContext):
     await state.update_data(adgroup_name=message.text)
     await state.set_state(CampaignStates.video_upload)
     await message.answer(
-        "Шаг 14/17 — Отправь видео файлом (при отправке нажать галочку «Отправить как файл»):",
+        "Шаг 14/17 — Отправь видео файлом (при отправке нажать галочку «Отправить как файл»; можно выбрать сразу несколько файлов и отправить одним альбомом):",
         reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="◀️ Назад")]], resize_keyboard=True)
     )
 
@@ -2453,24 +2541,25 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                             "landing_page_url_list": [{"landing_page_url": group_ad_url}] if group_ad_url else [],
                             "call_to_action_list": [{"call_to_action": data.get("call_to_action", "LEARN_MORE")}],
                         }
-                        # creative_auto_add_toggle: true — это и есть переключатель, из-за
-                        # которого TikTok показывает несколько креативов раздельными строками
-                        # в интерфейсе (без него — "No data" при развороте списка, даже если
-                        # creative_list формально содержит несколько элементов). Подтверждено
-                        # прямым сравнением ad_configuration рабочего объявления, созданного
-                        # вручную, против нашего.
+                        # creative_auto_add_toggle — согласно официальной документации
+                        # TikTok Marketing API, включает автогенерацию TikTok'ом новых
+                        # креативов (карусели/картинки, обновлённая музыка и т.п.) поверх
+                        # тех, что залил бот, и добавляет их в объявление без запроса.
+                        # Именно это создавало лишние обложки/карусели ("auto carousel
+                        # generation_...", "Mini Tractor-Music_Refresh-...") — баг,
+                        # обнаруженный клиентом 2026-09-13.
                         #
-                        # НО одного этого флага оказалось недостаточно: "No data" всё ещё
-                        # воспроизводился. Сравнение ad_configuration рабочего ("auto")
-                        # объявления показало, что TikTok также требует identity_type/
-                        # identity_id/identity_authorized_bc_id И product_info_enabled:
-                        # "NON_CATALOG" на уровне ad_configuration (не только внутри
-                        # creative_info у каждого креатива) — иначе объявление создаётся в
-                        # "урезанном" режиме без полноценной привязки нескольких креативов.
-                        # Подтверждено 2026-09-08 сравнением smart_plus/ad/get/ рабочей
-                        # группы "auto" (adgroup_id 1875249656764625) против бот-объявления.
+                        # Этот флаг был включён 2026-09-07 в рамках диагностики другого
+                        # бага ("No data" при разворачивании списка креативов в UI) —
+                        # тогда предполагалось, что именно он делает список креативов
+                        # разворачиваемым. Это предположение не подтвердилось: настоящая
+                        # причина "No data" оказалась в обычной асинхронной задержке
+                        # модерации видео-материалов на стороне TikTok (несколько часов
+                        # между созданием и review_status: null → ALL_AVAILABLE, см.
+                        # smart_plus/material/review_info/), никак не связанной с этим
+                        # флагом. Отключаем: он не нужен и вызывал реальный побочный эффект.
                         ad_config = {
-                            "creative_auto_add_toggle": True,
+                            "creative_auto_add_toggle": False,
                             "identity_type": identity["identity_type"],
                             "identity_id": identity["identity_id"],
                             "product_info_enabled": "NON_CATALOG",
@@ -2706,7 +2795,7 @@ async def show_step(state, msg_or_cb, step_name):
     elif step_name == "video_upload":
         await state.set_state(CampaignStates.video_upload)
         kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="◀️ Назад")]], resize_keyboard=True)
-        await m.answer("Шаг 14/17 — Отправь видео файлом (при отправке нажать галочку «Отправить как файл»)", reply_markup=kb)
+        await m.answer("Шаг 14/17 — Отправь видео файлом (при отправке нажать галочку «Отправить как файл»; можно выбрать сразу несколько файлов и отправить одним альбомом)", reply_markup=kb)
 
     elif step_name == "ad_text":
         await state.set_state(CampaignStates.ad_text)
