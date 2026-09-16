@@ -133,6 +133,9 @@ BC_NASTYA = {
     "7610323791662776337": "WGC-M-S-dacha-shop-3",
     "7610324072874049553": "WGC-M-S-dacha-shop-4",
     "7626753711976742913": "WGC-M-S-cool-by-shop-1",
+    "7682775374652243988": "WGC-M-S-cool-shop-16",
+    "7682776115451985940": "WGC-M-S-cool-shop-17",
+    "7682776762434109461": "WGC-M-S-cool-shop-18",
     "7628935051379752978": "WGC-M-S-dacha-shop.xyz1",
 }
 
