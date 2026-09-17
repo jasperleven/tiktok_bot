@@ -1783,6 +1783,27 @@ async def cmd_restart(message: types.Message, state: FSMContext):
     await message.answer("🔄 Состояние сброшено. Начни заново с /newcampaign", reply_markup=ReplyKeyboardRemove())
 
 
+# Календарь/время в боте собирается в местном времени рекламного кабинета
+# (Минск, UTC+3), а TikTok Marketing API принимает schedule_start_time и
+# schedule_end_time в UTC (без указания таймзоны в самой строке) — если
+# отправить местное время как есть, TikTok трактует его как UTC и кампания
+# стартует на 3 часа позже реального выбора пользователя (например, выбрали
+# 15:00 — по факту в интерфейсе TikTok показывается старт в 18:00).
+# Подтверждено 2026-09-17 живым тестом.
+MINSK_UTC_OFFSET_HOURS = 3
+
+
+def to_utc_schedule(local_dt_str):
+    """Конвертирует строку 'YYYY-MM-DD HH:MM:SS' из местного времени Минска
+    (UTC+3) в UTC — в этом же строковом формате, которого ожидает TikTok API.
+    None передаёт через себя без изменений (для необязательных дат окончания)."""
+    if not local_dt_str:
+        return local_dt_str
+    local_dt = datetime.datetime.strptime(local_dt_str, "%Y-%m-%d %H:%M:%S")
+    utc_dt = local_dt - datetime.timedelta(hours=MINSK_UTC_OFFSET_HOURS)
+    return utc_dt.strftime("%Y-%m-%d %H:%M:%S")
+
+
 async def download_telegram_file(file_id, session):
     """Скачивает файл из Telegram (по file_id) на диск, возвращает путь.
     Вынесено в отдельную функцию, чтобы её можно было использовать и для
@@ -2382,7 +2403,7 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                         "bid_type": group_bid_type,
                         "billing_event": "OCPM",
                         "schedule_type": "SCHEDULE_START_END" if group_schedule_end else "SCHEDULE_FROM_NOW",
-                        "schedule_start_time": group_schedule_start,
+                        "schedule_start_time": to_utc_schedule(group_schedule_start),
                         "placement_type": group_placement_type,
                         "placements": group_placements,
                         "targeting_optimization_mode": group_targeting_optimization_mode,
@@ -2401,7 +2422,7 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                     if group_bid_amount and group_bid_type == "BID_TYPE_CUSTOM":
                         sp_adgroup_payload["conversion_bid_price"] = float(group_bid_amount)
                     if group_schedule_end:
-                        sp_adgroup_payload["schedule_end_time"] = group_schedule_end
+                        sp_adgroup_payload["schedule_end_time"] = to_utc_schedule(group_schedule_end)
                     if is_website_lead and group_ad_url:
                         sp_adgroup_payload["landing_page_url"] = group_ad_url
                     if data.get("comment_disabled"):
@@ -2637,7 +2658,7 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                     "budget_mode": data["budget_mode"],
                     "budget": data["budget"],
                     "schedule_type": "SCHEDULE_START_END" if data.get("schedule_end") else "SCHEDULE_FROM_NOW",
-                    "schedule_start_time": data["schedule_start"],
+                    "schedule_start_time": to_utc_schedule(data["schedule_start"]),
                     "optimization_goal": optimize_goal,
                     "billing_event": billing_event,
                     "promotion_type": promotion_type,
@@ -2647,7 +2668,7 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                 if data.get("bid_amount"):
                     adgroup_payload["conversion_bid_price"] = data["bid_amount"]
                 if data.get("schedule_end"):
-                    adgroup_payload["schedule_end_time"] = data["schedule_end"]
+                    adgroup_payload["schedule_end_time"] = to_utc_schedule(data["schedule_end"])
                 if data["placement_type"] == "PLACEMENT_TYPE_NORMAL":
                     adgroup_payload["placements"] = data["placements"]
                 if data.get("pixel_id"):
