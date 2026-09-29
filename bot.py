@@ -136,6 +136,16 @@ BC_NASTYA = {
     "7682775374652243988": "WGC-M-S-cool-shop-16",
     "7682776115451985940": "WGC-M-S-cool-shop-17",
     "7682776762434109461": "WGC-M-S-cool-shop-18",
+    "7688676147424526357": "WGC-M-S-cool-shop-19",
+    "7688715909975818261": "WGC-M-S-cool-shop-20",
+    "7688717454981365781": "WGC-M-S-cool-shop-21",
+    "7688717874201919508": "WGC-M-S-cool-shop-22",
+    "7688718588020129844": "WGC-M-S-cool-shop-23",
+    "7688724699941584917": "WGC-M-S-cool-shop-24",
+    "7688725334584246273": "WGC-M-S-cool-shop-25",
+    "7688725453896515605": "WGC-M-S-cool-shop-26",
+    "7688725443649929237": "WGC-M-S-cool-shop-27",
+    "7688726013409034260": "WGC-M-S-cool-shop-28",
     "7628935051379752978": "WGC-M-S-dacha-shop.xyz1",
 }
 
@@ -539,30 +549,128 @@ async def publish_video_to_tiktok(identity, video_path, title, session, base_url
 
 # ─── Клавиатуры ──────────────────────────────────────────────────────────────
 
-def build_advertisers_keyboard(selected, advertisers):
+# ─── Выбор кабинетов: группы со значками + поиск по названию ─────────────────
+
+ADV_PAGE_SIZE = 12
+
+ADV_FAMILIES = [
+    ("cool",   "🧊 cool-shop",   r"cool"),
+    ("dacha",  "🌱 dacha",       r"dacha"),
+    ("tw",     "⚙️ technowave",  r"technowave"),
+    ("alfa",   "🅰️ alfa",        r"alfa"),
+    ("tshop",  "🛠 techshop",    r"techshop|techno-?shop"),
+    ("mega",   "📈 mega-techno", r"mega-techno"),
+    ("online", "🛍 online-sale", r"online-?sal|online-techno"),
+    ("itb",    "🏍 ITB",         r"^ITB_"),
+    ("other",  "📦 прочее",      None),
+]
+ADV_FAMILY_ICON = {k: label.split(" ")[0] for k, label, _ in ADV_FAMILIES}
+
+
+def adv_short_name(name: str) -> str:
+    """WGC-M-S-AM_3_technowave-ad33 -> technowave-ad33"""
+    return re.sub(r"^(WGC-M-S-)?(AM_)?(\d_)?", "", name) or name
+
+
+def adv_family(name: str) -> str:
+    for key, _, pattern in ADV_FAMILIES:
+        if pattern and re.search(pattern, name, re.IGNORECASE):
+            return key
+    return "other"
+
+
+def _natural_key(s: str):
+    return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", s)]
+
+
+def adv_match(name: str, adv_id: str, query: str) -> bool:
+    """Без учёта регистра, понимает кириллицу: 'дача' -> 'dacha'."""
+    q = (query or "").lower().strip()
+    if not q:
+        return True
+    n = name.lower()
+    return any(v in n or v in adv_id for v in {q, transliterate(q).lower()})
+
+
+def filter_advertisers(advertisers, family=None, query="", only_selected=False, selected=()):
+    items = [
+        (a, n) for a, n in advertisers.items()
+        if (not family or adv_family(n) == family)
+        and adv_match(n, a, query)
+        and (not only_selected or a in selected)
+    ]
+    items.sort(key=lambda x: _natural_key(adv_short_name(x[1])))
+    return items
+
+
+def build_adv_keyboard(advertisers, selected, family=None, query="", page=0,
+                       only_selected=False, mode="select"):
     rows = []
-    for adv_id, name in advertisers.items():
-        mark = "✅" if adv_id in selected else "☐"
-        rows.append([InlineKeyboardButton(text=f"{mark} {name}", callback_data=f"adv_{adv_id}")])
+
+    # Группы со значками (только непустые), в скобках — сколько выбрано
+    present = {adv_family(n) for n in advertisers.values()}
+    fam_btns = []
+    for key, label, _ in ADV_FAMILIES:
+        if key not in present:
+            continue
+        cnt = sum(1 for a, n in advertisers.items() if adv_family(n) == key and a in selected)
+        mark = "▶️ " if family == key else ""
+        fam_btns.append(InlineKeyboardButton(
+            text=f"{mark}{label}" + (f" ({cnt})" if cnt else ""),
+            callback_data=f"advf_{key}"))
+    for i in range(0, len(fam_btns), 2):
+        rows.append(fam_btns[i:i + 2])
+
+    no_filter = not family and not query and not only_selected
     rows.append([
-        InlineKeyboardButton(text="✅ Выбрать все", callback_data="adv_all"),
-        InlineKeyboardButton(text="❌ Снять все", callback_data="adv_none"),
+        InlineKeyboardButton(text=("✅ " if no_filter else "") + "🌐 Все", callback_data="advf_reset"),
+        InlineKeyboardButton(text=("✅ " if only_selected else "") + f"☑️ Выбранные ({len(selected)})",
+                             callback_data="advsel_only"),
     ])
-    rows.append([InlineKeyboardButton(text="➡️ Далее", callback_data="advertisers_done")])
+
+    # Кабинеты по 2 в ряд, со значком группы
+    items = filter_advertisers(advertisers, family, query, only_selected, selected)
+    total_pages = max(1, -(-len(items) // ADV_PAGE_SIZE))
+    page = max(0, min(page, total_pages - 1))
+    chunk = items[page * ADV_PAGE_SIZE:(page + 1) * ADV_PAGE_SIZE]
+    btns = [
+        InlineKeyboardButton(
+            text=f"{'✅' if a in selected else '☐'} {ADV_FAMILY_ICON[adv_family(n)]} {adv_short_name(n)}",
+            callback_data=f"adv_{a}")
+        for a, n in chunk
+    ]
+    for i in range(0, len(btns), 2):
+        rows.append(btns[i:i + 2])
+    if not items:
+        rows.append([InlineKeyboardButton(text="— ничего не найдено —", callback_data="cal_noop")])
+
+    if total_pages > 1:
+        rows.append([
+            InlineKeyboardButton(text="◀️", callback_data=f"advp_{page - 1}" if page > 0 else "cal_noop"),
+            InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="cal_noop"),
+            InlineKeyboardButton(text="▶️", callback_data=f"advp_{page + 1}" if page < total_pages - 1 else "cal_noop"),
+        ])
+
+    rows.append([
+        InlineKeyboardButton(text=f"✅ Выбрать видимые ({len(items)})", callback_data="advvis_all"),
+        InlineKeyboardButton(text="❌ Снять видимые", callback_data="advvis_none"),
+    ])
+    if selected:
+        rows.append([InlineKeyboardButton(text="🧹 Снять все выбранные", callback_data="advsel_clear")])
+
+    if mode == "confirm":
+        rows.append([InlineKeyboardButton(text="🚀 Создать кампанию", callback_data="create_campaign")])
+    else:
+        rows.append([InlineKeyboardButton(text=f"➡️ Далее ({len(selected)})", callback_data="advertisers_done")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def build_advertisers_keyboard(selected, advertisers):
+    return build_adv_keyboard(advertisers, selected, mode="select")
 
 
 def build_confirm_keyboard(selected, advertisers):
-    rows = []
-    for adv_id, name in advertisers.items():
-        mark = "✅" if adv_id in selected else "☐"
-        rows.append([InlineKeyboardButton(text=f"{mark} {name}", callback_data=f"adv_{adv_id}")])
-    rows.append([
-        InlineKeyboardButton(text="✅ Выбрать все", callback_data="adv_all"),
-        InlineKeyboardButton(text="❌ Снять все", callback_data="adv_none"),
-    ])
-    rows.append([InlineKeyboardButton(text="🚀 Создать кампанию", callback_data="create_campaign")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    return build_adv_keyboard(advertisers, selected, only_selected=True, mode="confirm")
 
 
 # ─── Web server ───────────────────────────────────────────────────────────────
@@ -1034,1079 +1142,122 @@ async def cmd_new_campaign(message: types.Message, state: FSMContext):
     )
 
 
-async def start_new_campaign_flow(m, state: FSMContext, user_id):
-    await state.set_state(CampaignStates.select_advertisers)
-    await state.update_data(selected_advertisers=[])
-    await m.answer(
-        f"📢 *Создание рекламной кампании*\n\nБЦ: {get_user_bc(user_id)}\nШаг 1/17 — Выбери рекламные кабинеты:",
-        parse_mode="Markdown",
-        reply_markup=build_advertisers_keyboard([], get_user_advertisers(user_id))
+ADV_SEARCH_HINT = "_Напиши часть названия в чат (например `дача`, `cool-shop-2`, `ad4`) или выбери группу. `-` — сбросить поиск._"
+
+
+async def render_adv_keyboard(state: FSMContext, user_id):
+    data = await state.get_data()
+    return build_adv_keyboard(
+        get_user_advertisers(user_id),
+        data.get("selected_advertisers", []),
+        family=data.get("adv_family"),
+        query=data.get("adv_query", ""),
+        page=data.get("adv_page", 0),
+        only_selected=data.get("adv_only_selected", False),
+        mode=data.get("adv_mode", "select"),
     )
 
 
-@dp.callback_query(F.data.startswith("adv_") & ~F.data.in_({"adv_all", "adv_none"}))
+async def refresh_adv_keyboard(callback: types.CallbackQuery, state: FSMContext):
+    try:
+        await callback.message.edit_reply_markup(
+            reply_markup=await render_adv_keyboard(state, callback.from_user.id))
+    except Exception:
+        pass
+
+
+async def start_new_campaign_flow(m, state: FSMContext, user_id):
+    await state.set_state(CampaignStates.select_advertisers)
+    await state.update_data(selected_advertisers=[], adv_family=None, adv_query="",
+                            adv_page=0, adv_only_selected=False, adv_mode="select")
+    await m.answer(
+        f"📢 *Создание рекламной кампании*\n\nБЦ: {get_user_bc(user_id)}\n"
+        f"Шаг 1/17 — Выбери рекламные кабинеты.\n{ADV_SEARCH_HINT}",
+        parse_mode="Markdown",
+        reply_markup=await render_adv_keyboard(state, user_id)
+    )
+
+
+@dp.callback_query(F.data.startswith("adv_"))
 async def toggle_advertiser(callback: types.CallbackQuery, state: FSMContext):
     adv_id = callback.data.replace("adv_", "")
-    advertisers = get_user_advertisers(callback.from_user.id)
-    if adv_id not in advertisers:
+    if adv_id not in get_user_advertisers(callback.from_user.id):
         await callback.answer()
         return
     data = await state.get_data()
-    selected = data.get("selected_advertisers", [])
+    selected = list(data.get("selected_advertisers", []))
     if adv_id in selected:
         selected.remove(adv_id)
     else:
         selected.append(adv_id)
     await state.update_data(selected_advertisers=selected)
-    try:
-        current_state = await state.get_state()
-        if current_state == CampaignStates.select_advertisers:
-            await callback.message.edit_reply_markup(reply_markup=build_advertisers_keyboard(selected, advertisers))
-        else:
-            await callback.message.edit_reply_markup(reply_markup=build_confirm_keyboard(selected, advertisers))
-    except Exception:
-        pass
+    await refresh_adv_keyboard(callback, state)
     await callback.answer()
 
 
-@dp.callback_query(F.data == "adv_all")
-async def select_all_advertisers(callback: types.CallbackQuery, state: FSMContext):
+@dp.callback_query(F.data.startswith("advf_"))
+async def adv_filter_family(callback: types.CallbackQuery, state: FSMContext):
+    key = callback.data.replace("advf_", "")
+    data = await state.get_data()
+    if key == "reset" or data.get("adv_family") == key:
+        await state.update_data(adv_family=None, adv_query="", adv_page=0, adv_only_selected=False)
+    else:
+        await state.update_data(adv_family=key, adv_query="", adv_page=0, adv_only_selected=False)
+    await refresh_adv_keyboard(callback, state)
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("advp_"))
+async def adv_page(callback: types.CallbackQuery, state: FSMContext):
+    await state.update_data(adv_page=int(callback.data.replace("advp_", "")))
+    await refresh_adv_keyboard(callback, state)
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "advsel_only")
+async def adv_only_selected(callback: types.CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    await state.update_data(adv_only_selected=not data.get("adv_only_selected", False), adv_page=0)
+    await refresh_adv_keyboard(callback, state)
+    await callback.answer()
+
+
+@dp.callback_query(F.data.in_({"advvis_all", "advvis_none", "advsel_clear"}))
+async def adv_bulk(callback: types.CallbackQuery, state: FSMContext):
+    data = await state.get_data()
     advertisers = get_user_advertisers(callback.from_user.id)
-    selected = list(advertisers.keys())
+    selected = list(data.get("selected_advertisers", []))
+    if callback.data == "advsel_clear":
+        selected = []
+        msg = "Все сняты"
+    else:
+        visible = [a for a, _ in filter_advertisers(
+            advertisers, data.get("adv_family"), data.get("adv_query", ""),
+            data.get("adv_only_selected", False), selected)]
+        if callback.data == "advvis_all":
+            selected += [a for a in visible if a not in selected]
+            msg = f"Выбрано: {len(selected)}"
+        else:
+            selected = [a for a in selected if a not in visible]
+            msg = f"Осталось: {len(selected)}"
     await state.update_data(selected_advertisers=selected)
-    try:
-        current_state = await state.get_state()
-        if current_state == CampaignStates.select_advertisers:
-            await callback.message.edit_reply_markup(reply_markup=build_advertisers_keyboard(selected, advertisers))
-        else:
-            await callback.message.edit_reply_markup(reply_markup=build_confirm_keyboard(selected, advertisers))
-    except Exception:
-        pass
-    await callback.answer(f"Выбрано {len(selected)} кабинетов")
+    await refresh_adv_keyboard(callback, state)
+    await callback.answer(msg)
 
 
-@dp.callback_query(F.data == "adv_none")
-async def deselect_all_advertisers(callback: types.CallbackQuery, state: FSMContext):
-    advertisers = get_user_advertisers(callback.from_user.id)
-    await state.update_data(selected_advertisers=[])
-    try:
-        current_state = await state.get_state()
-        if current_state == CampaignStates.select_advertisers:
-            await callback.message.edit_reply_markup(reply_markup=build_advertisers_keyboard([], advertisers))
-        else:
-            await callback.message.edit_reply_markup(reply_markup=build_confirm_keyboard([], advertisers))
-    except Exception:
-        pass
-    await callback.answer("Все сняты")
-
-
-@dp.callback_query(F.data == "advertisers_done")
-async def advertisers_done(callback: types.CallbackQuery, state: FSMContext):
+# Поиск по названию: пользователь пишет часть названия в чат
+@dp.message(CampaignStates.select_advertisers, F.text, F.text != "◀️ Назад", ~F.text.startswith("/"))
+async def adv_text_search(message: types.Message, state: FSMContext):
+    q = message.text.strip()
+    if q in ("-", "*", "все", "всё"):
+        q = ""
+    await state.update_data(adv_query=q, adv_family=None, adv_page=0, adv_only_selected=False)
     data = await state.get_data()
-    selected = data.get("selected_advertisers", [])
-    if not selected:
-        await callback.answer("Выбери хотя бы один кабинет!", show_alert=True)
-        return
-    await state.set_state(CampaignStates.campaign_name)
-    await callback.message.answer(f"✅ Выбрано {len(selected)} кабинетов\n\nШаг 2/17 — Введи название кампании:", reply_markup=ReplyKeyboardRemove())
-    await callback.answer()
-
-
-@dp.message(CampaignStates.campaign_name, F.text != "◀️ Назад")
-async def got_campaign_name(message: types.Message, state: FSMContext):
-    await state.update_data(campaign_name=message.text)
-    await state.set_state(CampaignStates.campaign_objective)
-    keyboard = ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text=k)] for k in OBJECTIVES.keys()] + [[KeyboardButton(text="◀️ Назад")]],
-        resize_keyboard=True, one_time_keyboard=True
-    )
-    await message.answer("Шаг 3/17 — Выбери цель рекламы:", reply_markup=keyboard)
-
-
-@dp.message(CampaignStates.campaign_objective, F.text != "◀️ Назад")
-async def got_objective(message: types.Message, state: FSMContext):
-    if message.text not in OBJECTIVES:
-        await message.answer("Выбери цель из списка 👇")
-        return
-    await state.update_data(objective=OBJECTIVES[message.text])
-    await state.set_state(CampaignStates.budget_level)
-    keyboard = ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="📊 На кампанию (CBO)")],
-            [KeyboardButton(text="📁 На группу объявлений")],
-            [KeyboardButton(text="◀️ Назад")],
-        ],
-        resize_keyboard=True, one_time_keyboard=True
-    )
-    await message.answer("Шаг 4/17 — Где устанавливать бюджет?", reply_markup=keyboard)
-
-
-@dp.message(CampaignStates.budget_level, F.text != "◀️ Назад")
-async def got_budget_level(message: types.Message, state: FSMContext):
-    if message.text == "📊 На кампанию (CBO)":
-        await state.update_data(budget_optimize_on=True)
-    elif message.text == "📁 На группу объявлений":
-        await state.update_data(budget_optimize_on=False)
-    else:
-        await message.answer("Выбери из списка 👇")
-        return
-    await state.set_state(CampaignStates.budget_mode)
-    keyboard = ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="📅 Дневной")],
-            [KeyboardButton(text="💰 Общий")],
-            [KeyboardButton(text="◀️ Назад")],
-        ],
-        resize_keyboard=True, one_time_keyboard=True
-    )
-    await message.answer("Шаг 5/17 — Тип бюджета:", reply_markup=keyboard)
-
-
-@dp.message(CampaignStates.budget_mode, F.text != "◀️ Назад")
-async def got_budget_mode(message: types.Message, state: FSMContext):
-    if message.text == "📅 Дневной":
-        await state.update_data(budget_mode="BUDGET_MODE_DAY")
-    elif message.text == "💰 Общий":
-        await state.update_data(budget_mode="BUDGET_MODE_TOTAL")
-    else:
-        await message.answer("Выбери из списка 👇")
-        return
-    await state.set_state(CampaignStates.budget_amount)
-    await message.answer("Шаг 6/17 — Введи сумму бюджета (USD):", reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="◀️ Назад")]], resize_keyboard=True))
-
-
-@dp.message(CampaignStates.budget_amount, F.text != "◀️ Назад")
-async def got_budget_amount(message: types.Message, state: FSMContext):
-    try:
-        amount = float(message.text.replace(",", "."))
-        if amount <= 0:
-            await message.answer("❌ Введи сумму больше 0")
-            return
-    except ValueError:
-        await message.answer("❌ Введи число. Например: 20")
-        return
-    await state.update_data(budget=amount)
-    await state.set_state(CampaignStates.adgroup_name)
-    await message.answer("Шаг 7/17 — Введи название группы объявлений:", reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="◀️ Назад")]], resize_keyboard=True))
-
-
-@dp.message(CampaignStates.adgroup_name, F.text != "◀️ Назад")
-async def got_adgroup_name(message: types.Message, state: FSMContext):
-    await state.update_data(adgroup_name=message.text)
-    await state.set_state(CampaignStates.placement)
-    keyboard = ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="🎵 Только TikTok")],
-            [KeyboardButton(text="🌐 Автоматически")],
-            [KeyboardButton(text="◀️ Назад")],
-        ],
-        resize_keyboard=True, one_time_keyboard=True
-    )
-    await message.answer("Шаг 8/17 — Плейсменты:", reply_markup=keyboard)
-
-
-@dp.message(CampaignStates.placement, F.text != "◀️ Назад")
-async def got_placement(message: types.Message, state: FSMContext):
-    if message.text == "🎵 Только TikTok":
-        await state.update_data(placement_type="PLACEMENT_TYPE_NORMAL", placements=["PLACEMENT_TIKTOK"])
-    elif message.text == "🌐 Автоматически":
-        await state.update_data(placement_type="PLACEMENT_TYPE_AUTOMATIC", placements=[])
-    else:
-        await message.answer("Выбери из списка 👇")
-        return
-    # Гео по умолчанию — Беларусь, отдельный шаг выбора страны убран
-    await state.update_data(geo=DEFAULT_GEO)
-    await state.set_state(CampaignStates.schedule_start)
-    now = datetime.datetime.now()
-    await message.answer("Шаг 9/17 — Дата начала:", reply_markup=ReplyKeyboardRemove())
-    await message.answer("Выбери день:", reply_markup=build_calendar_keyboard(now.year, now.month, "start"))
-
-
-@dp.callback_query(F.data == "cal_noop")
-async def cal_noop(callback: types.CallbackQuery):
-    await callback.answer()
-
-
-@dp.callback_query(F.data.startswith("calnav_"))
-async def cal_navigate(callback: types.CallbackQuery, state: FSMContext):
-    _, field, ym = callback.data.split("_", 2)
-    year, month = map(int, ym.split("-"))
-    try:
-        await callback.message.edit_reply_markup(reply_markup=build_calendar_keyboard(year, month, field))
-    except Exception:
-        pass
-    await callback.answer()
-
-
-@dp.callback_query(F.data.startswith("calback_"))
-async def cal_back_to_calendar(callback: types.CallbackQuery, state: FSMContext):
-    _, field, ym = callback.data.split("_", 2)
-    year, month = map(int, ym.split("-"))
-    await callback.message.answer("Выбери день:", reply_markup=build_calendar_keyboard(year, month, field))
-    await callback.answer()
-
-
-@dp.callback_query(F.data.startswith("caldate_"))
-async def cal_pick_date(callback: types.CallbackQuery, state: FSMContext):
-    _, field, date_str = callback.data.split("_", 2)
-    await callback.message.answer(f"📅 Дата: {date_str}\nВыбери время:", reply_markup=build_time_keyboard(field, date_str))
-    await callback.answer()
-
-
-@dp.callback_query(F.data.startswith("caltime_"))
-async def cal_pick_time(callback: types.CallbackQuery, state: FSMContext):
-    _, field, date_str, time_str = callback.data.split("_", 3)
-    full_dt = f"{date_str} {time_str}:00"
-    await callback.answer()
-    await _apply_calendar_datetime(callback.message, state, field, full_dt)
-
-
-@dp.callback_query(F.data.startswith("caltimemanual_"))
-async def cal_time_manual(callback: types.CallbackQuery, state: FSMContext):
-    _, field, date_str = callback.data.split("_", 2)
-    await state.update_data(cal_pending_field=field, cal_pending_date=date_str)
-    await callback.message.answer(
-        f"📅 Дата: {date_str}\nВведи время в формате `HH:MM` (например `14:30`):",
-        parse_mode="Markdown"
-    )
-    await callback.answer()
-
-
-@dp.message(CampaignStates.schedule_start, F.text.regexp(r"^\d{1,2}:\d{2}$"))
-@dp.message(CampaignStates.schedule_end, F.text.regexp(r"^\d{1,2}:\d{2}$"))
-async def got_manual_time(message: types.Message, state: FSMContext):
-    data = await state.get_data()
-    field = data.get("cal_pending_field")
-    date_str = data.get("cal_pending_date")
-    if not field or not date_str:
-        return  # не в процессе ручного ввода времени — пропускаем
-    hh, mm = message.text.split(":")
-    if not (0 <= int(hh) <= 23 and 0 <= int(mm) <= 59):
-        await message.answer("Некорректное время, попробуй ещё раз в формате `HH:MM`", parse_mode="Markdown")
-        return
-    full_dt = f"{date_str} {int(hh):02d}:{int(mm):02d}:00"
-    await state.update_data(cal_pending_field=None, cal_pending_date=None)
-    await _apply_calendar_datetime(message, state, field, full_dt)
-
-
-async def _apply_calendar_datetime(m, state: FSMContext, field, full_dt):
-    """Сохраняет выбранную дату/время и переводит на следующий шаг сценария."""
-    if field == "start":
-        await state.update_data(schedule_start=full_dt)
-        await m.answer(f"✅ Дата начала: {full_dt}")
-        now = datetime.datetime.now()
-        await m.answer(
-            "Шаг 10/17 — Дата окончания (или «Без даты окончания»):",
-            reply_markup=build_calendar_keyboard(now.year, now.month, "end")
-        )
-    else:
-        await state.update_data(schedule_end=full_dt)
-        await m.answer(f"✅ Дата окончания: {full_dt}")
-        await _finish_schedule_step(m, state)
-
-
-@dp.callback_query(F.data == "cal_no_end")
-async def cal_no_end(callback: types.CallbackQuery, state: FSMContext):
-    await state.update_data(schedule_end=None)
-    await callback.message.answer("✅ Без даты окончания")
-    await callback.answer()
-    await _finish_schedule_step(callback.message, state)
-
-
-async def _finish_schedule_step(m, state: FSMContext):
-    # BID_TYPE_CUSTOM валиден для Smart+ adgroup по официальной схеме API (SmartBidType),
-    # поэтому шаг выбора ставки теперь одинаковый для всех целей, включая LEAD_GENERATION
-    await state.set_state(CampaignStates.bid_type)
-    keyboard = ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="🤖 Автоставка")],
-            [KeyboardButton(text="✍️ Ручная ставка")],
-            [KeyboardButton(text="◀️ Назад")],
-        ],
-        resize_keyboard=True, one_time_keyboard=True
-    )
-    await m.answer("Шаг 12/17 — Ставка:", reply_markup=keyboard)
-
-
-async def show_pixel_list(message_or_callback, state: FSMContext):
-    """Показывает список пикселей из всех выбранных кабинетов"""
-    m = message_or_callback if isinstance(message_or_callback, types.Message) else message_or_callback.message
-    data = await state.get_data()
-    selected = data.get("selected_advertisers", [])
-
-    await m.answer("🔍 Загружаю пиксели...", reply_markup=ReplyKeyboardRemove())
-
-    all_pixels = {}  # pixel_id -> {name, advertisers}
-    text_lines = []
-
-    for adv_id in selected:
-        name = ALL_ADVERTISERS.get(adv_id, adv_id)
-        pixels = await search_pixels(adv_id, "")
-        if pixels:
-            text_lines.append(f"📋 {name}:")
-            for p in pixels[:30]:
-                pid = p["pixel_id"]
-                pname = p.get("name") or pid
-                text_lines.append(f"  • {pname}")
-                if pid not in all_pixels:
-                    all_pixels[pid] = {"name": pname, "advertisers": []}
-                all_pixels[pid]["advertisers"].append(adv_id)
-
-    if not all_pixels:
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="◀️ Назад", callback_data="back_to_bid")],
-            [InlineKeyboardButton(text="⏭ Пропустить", callback_data="pixel_skip")]
-        ])
-        await m.answer("❌ Пиксели не найдены ни в одном кабинете.", reply_markup=keyboard)
-        return
-
-    # Показываем текстовый список
-    await m.answer("Шаг 13/17 — Пиксели по кабинетам:\n\n" + "\n".join(text_lines))
-
-    # Показываем кнопки выбора (уникальные пиксели)
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text=info["name"],
-            callback_data=f"pixel_{pid}"
-        )]
-        for pid, info in list(all_pixels.items())[:40]
-    ] + [
-        [InlineKeyboardButton(text="◀️ Назад", callback_data="back_to_bid")],
-        [InlineKeyboardButton(text="⏭ Пропустить", callback_data="pixel_skip")]
-    ])
-    await m.answer("Выбери пиксель:", reply_markup=keyboard)
-    await state.set_state(CampaignStates.pixel_select)
-
-
-@dp.message(CampaignStates.bid_type, F.text != "◀️ Назад")
-async def got_bid_type(message: types.Message, state: FSMContext):
-    if message.text == "🤖 Автоставка":
-        await state.update_data(bid_type="BID_TYPE_NO_BID", bid_amount=None)
-        await show_pixel_list(message, state)
-    elif message.text == "✍️ Ручная ставка":
-        await state.update_data(bid_type="BID_TYPE_CUSTOM", bid_amount=None)
-        await state.set_state(CampaignStates.bid_amount)
-        await message.answer("Шаг 12/17 — Введи ставку (USD):", reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="◀️ Назад")]], resize_keyboard=True))
-    else:
-        await message.answer("Выбери из списка 👇")
-
-
-@dp.message(CampaignStates.bid_amount, F.text != "◀️ Назад")
-async def got_bid_amount(message: types.Message, state: FSMContext):
-    try:
-        bid = float(message.text.replace(",", "."))
-        if bid <= 0:
-            await message.answer("❌ Ставка должна быть больше 0")
-            return
-    except ValueError:
-        await message.answer("❌ Введи число. Например: 5")
-        return
-    await state.update_data(bid_amount=bid)
-    await log_api("BID AMOUNT SAVED", {"bid_amount": bid, "bid_type": (await state.get_data()).get("bid_type")}, {})
-    await show_pixel_list(message, state)
-
-
-@dp.message(Command("skippixel"))
-async def skip_pixel(message: types.Message, state: FSMContext):
-    await state.update_data(pixel_id=None)
-    await state.set_state(CampaignStates.video_upload)
-    await message.answer("Шаг 14/17 — Отправь видео файлом (при отправке нажать галочку «Отправить как файл»; можно выбрать сразу несколько файлов и отправить одним альбомом)")
-
-
-@dp.message(CampaignStates.pixel_search, F.text != "◀️ Назад")
-async def got_pixel_search(message: types.Message, state: FSMContext):
-    # Оставляем для совместимости — перенаправляем на список
-    await show_pixel_list(message, state)
-
-
-@dp.callback_query(F.data.startswith("pixel_") & ~F.data.endswith("skip"))
-async def got_pixel_select(callback: types.CallbackQuery, state: FSMContext):
-    pixel_id = callback.data.replace("pixel_", "")
-    await state.update_data(pixel_id=pixel_id)
-    await callback.message.answer(f"✅ Пиксель: {pixel_id}")
-    await show_lead_destination(callback.message, state)
-    await callback.answer()
-
-
-async def show_lead_destination(m, state: FSMContext):
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🌐 На сайт (внешняя форма/лендинг)", callback_data="dest_WEBSITE")],
-        [InlineKeyboardButton(text="📱 Мгновенная форма TikTok", callback_data="dest_INSTANT_FORM")],
-    ])
-    await m.answer(
-        "Шаг 13а.1 — Куда ведём лид?\n"
-        "(как в самом TikTok Ads Manager: сначала место назначения, потом событие оптимизации внутри него)",
-        reply_markup=keyboard
-    )
-    await state.set_state(CampaignStates.lead_destination)
-
-
-@dp.callback_query(F.data.startswith("dest_"))
-async def got_lead_destination(callback: types.CallbackQuery, state: FSMContext):
-    dest = callback.data.replace("dest_", "")
-    await state.update_data(lead_destination=dest)
-    label = "🌐 На сайт" if dest == "WEBSITE" else "📱 Мгновенная форма TikTok"
-    await callback.message.answer(f"✅ Назначение: {label}")
-    await show_pixel_event(callback.message, state)
-    await callback.answer()
-
-
-@dp.callback_query(F.data == "pixel_skip")
-async def skip_pixel_callback(callback: types.CallbackQuery, state: FSMContext):
-    await state.update_data(pixel_id=None, optimization_event=None)
-    data = await state.get_data()
-    if data.get("picking_group_pixel"):
-        await state.update_data(picking_group_pixel=False)
-        await state.set_state(CampaignStates.adgroup_name)
-        await callback.message.answer(
-            "Введи название СЛЕДУЮЩЕЙ группы объявлений:",
-            reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="◀️ Назад")]], resize_keyboard=True)
-        )
-        await callback.answer()
-        return
-    await show_gender_step(callback.message, state)
-    await callback.answer()
-
-
-async def get_pixel_events(advertiser_id, pixel_id):
-    """Возвращает список реально настроенных событий у конкретного пикселя —
-    [(event_key, label), ...] — чтобы показывать пользователю только валидные
-    варианты и физически исключить ошибку 'This pixel event type does not
-    exist' на шаге создания adgroup. event_key — это то же значение, что API
-    ожидает как optimization_event (event_type, а не всегда optimization_event —
-    у некоторых типов, например SUBMIT_APPLICATION, optimization_event: null)."""
-    labels = {
-        "FORM": "📋 Заполненная форма (в TikTok)",
-        "SUBMIT_APPLICATION": "🌐 Заявка на сайте",
-        "ON_WEB_ORDER": "🛒 Заказ/покупка на сайте",
-        "SHOPPING": "🛒 Покупка",
-        "ON_WEB_REGISTER": "📝 Регистрация",
-        "CONSULT": "📞 Контакт",
-        "COMPLETE_PAYMENT": "💳 Оплата",
-    }
-    try:
-        async with aiohttp.ClientSession() as session:
-            page = 1
-            while True:
-                resp = await session.get(
-                    "https://business-api.tiktok.com/open_api/v1.3/pixel/list/",
-                    params={"advertiser_id": advertiser_id, "page_size": 20, "page": page},
-                    headers={"Access-Token": get_token_for_advertiser(advertiser_id)}
-                )
-                data = await resp.json()
-                if data.get("code") != 0:
-                    return None  # не смогли получить — сигнал использовать статичный список
-                for p in data.get("data", {}).get("pixels", []):
-                    if str(p.get("pixel_id", "")) == str(pixel_id):
-                        result = []
-                        seen = set()
-                        for ev in p.get("events", []):
-                            if ev.get("deprecated"):
-                                continue
-                            key = ev.get("event_type")
-                            if not key or key in seen or key in ("PAGE_VIEW", "LANDING_PAGE_VIEW", "ENGAGED_SESSION"):
-                                continue
-                            seen.add(key)
-                            result.append((key, labels.get(key, f"• {key}")))
-                        return result
-                page_info = data.get("data", {}).get("page_info", {})
-                if page >= page_info.get("total_page", 1):
-                    break
-                page += 1
-            return None
-    except Exception:
-        return None
-
-
-
-async def show_pixel_event(m, state: FSMContext):
-    data = await state.get_data()
-    pixel_id = data.get("pixel_id")
-    check_advertiser_id = (data.get("selected_advertisers") or [None])[0]
-    is_website_dest = data.get("lead_destination") == "WEBSITE"
-    form_label = "📋 Заполнение формы (Submit form)" if is_website_dest else "📋 Заполненная форма (в TikTok)"
-
-    rows = []
-    real_events = None
-    if pixel_id and check_advertiser_id:
-        real_events = await get_pixel_events(check_advertiser_id, pixel_id)
-
-    if real_events:
-        for key, label in real_events:
-            if key == "FORM":
-                label = form_label
-            rows.append([InlineKeyboardButton(text=label, callback_data=f"event_{key}")])
-        # Запоминаем ИМЕННО ЭТОТ список — при клике сверяемся с ним же, без
-        # повторного живого запроса к API. Раньше вторая (повторная) проверка
-        # при клике иногда "не блокировала" на временном сбое сети, и
-        # несуществующее у пикселя событие проскакивало в TikTok API с ошибкой
-        # только на шаге создания adgroup — это и чинит.
-        await state.update_data(
-            verified_pixel_events=[k for k, _ in real_events],
-            verified_pixel_events_for=pixel_id,
-        )
-    else:
-        # Не удалось получить реальный список событий пикселя (сеть/ошибка API) —
-        # показываем статичный список, но помечаем, что список НЕ проверен —
-        # got_pixel_event тогда обязан сходить за живой проверкой перед сохранением.
-        rows = [
-            [InlineKeyboardButton(text=form_label, callback_data="event_FORM")],
-            [InlineKeyboardButton(text="🌐 Заявка на сайте", callback_data="event_SUBMIT_APPLICATION")],
-            [InlineKeyboardButton(text="🛒 Покупка", callback_data="event_SHOPPING")],
-            [InlineKeyboardButton(text="📝 Регистрация", callback_data="event_ON_WEB_REGISTER")],
-            [InlineKeyboardButton(text="📞 Контакт", callback_data="event_CONSULT")],
-        ]
-        await state.update_data(verified_pixel_events=None, verified_pixel_events_for=None)
-    rows.append([InlineKeyboardButton(text="⏭ Пропустить", callback_data="event_skip")])
-    keyboard = InlineKeyboardMarkup(inline_keyboard=rows)
-    await m.answer("Шаг 13б — Событие пикселя:", reply_markup=keyboard)
-    await state.set_state(CampaignStates.pixel_event)
-
-
-@dp.callback_query(F.data.startswith("event_"))
-async def got_pixel_event(callback: types.CallbackQuery, state: FSMContext):
-    event = callback.data.replace("event_", "")
-    if event == "skip":
-        await state.update_data(optimization_event=None)
-    else:
-        data = await state.get_data()
-        pixel_id = data.get("pixel_id")
-        check_advertiser_id = (data.get("selected_advertisers") or [None])[0]
-        verified_events = data.get("verified_pixel_events")
-        verified_for = data.get("verified_pixel_events_for")
-
-        blocked = False
-        if verified_events is not None and verified_for == pixel_id:
-            # Есть сохранённый при показе кнопок список реальных событий этого
-            # же пикселя — сверяемся с ним напрямую, без сети и без риска
-            # "не смогли проверить, пропускаем".
-            blocked = event not in verified_events
-        elif pixel_id and check_advertiser_id:
-            # Список при показе получить не удалось (сеть/ошибка API) — делаем
-            # живую проверку сейчас. Если и она не отвечает — блокируем
-            # (fail closed), а не пропускаем как раньше: лучше попросить
-            # повторить, чем пустить в TikTok заведомо несовместимую пару
-            # пиксель+событие и получить неясную ошибку на шаге adgroup/create/.
-            try:
-                blocked = not await pixel_has_event(check_advertiser_id, pixel_id, event)
-            except Exception:
-                blocked = True
-
-        if blocked:
-            await callback.message.answer(
-                f"⚠️ У выбранного пикселя не настроено событие «{event}» (или не удалось это "
-                f"проверить — попробуй ещё раз). Выбери другое событие из списка ниже, "
-                f"либо начни заново /newcampaign с другим пикселем."
-            )
-            await show_pixel_event(callback.message, state)
-            await callback.answer()
-            return
-        await state.update_data(optimization_event=event)
-        await callback.message.answer(f"✅ Событие: {event}")
-
-    data = await state.get_data()
-    if data.get("picking_group_pixel"):
-        # Это был повторный выбор пикселя/события ДЛЯ ДОПОЛНИТЕЛЬНОЙ группы —
-        # пол/возраст/настройки контента уже заданы раньше и общие на всю
-        # кампанию, повторно спрашивать их не нужно, сразу переходим к
-        # названию новой группы.
-        await state.update_data(picking_group_pixel=False)
-        await state.set_state(CampaignStates.adgroup_name)
-        await callback.message.answer(
-            "Введи название СЛЕДУЮЩЕЙ группы объявлений:",
-            reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="◀️ Назад")]], resize_keyboard=True)
-        )
-        await callback.answer()
-        return
-
-    await show_gender_step(callback.message, state)
-    await callback.answer()
-
-
-async def show_gender_step(m, state: FSMContext):
-    keyboard = ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="👥 Все")],
-            [KeyboardButton(text="👨 Мужчины")],
-            [KeyboardButton(text="👩 Женщины")],
-        ],
-        resize_keyboard=True, one_time_keyboard=True
-    )
-    await m.answer("Шаг 13в — Пол аудитории:", reply_markup=keyboard)
-    await state.set_state(CampaignStates.gender)
-
-
-@dp.message(CampaignStates.gender, F.text != "◀️ Назад")
-async def got_gender(message: types.Message, state: FSMContext):
-    mapping = {
-        "👥 Все": [],
-        "👨 Мужчины": ["GENDER_MALE"],
-        "👩 Женщины": ["GENDER_FEMALE"],
-    }
-    if message.text not in mapping:
-        await message.answer("Выбери из списка 👇")
-        return
-    await state.update_data(genders=mapping[message.text])
-    await show_age_step(message, state)
-
-
-async def show_age_step(m, state: FSMContext):
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Выбрать все", callback_data="age_all")],
-        [InlineKeyboardButton(text="18-24", callback_data="age_AGE_18_24"),
-         InlineKeyboardButton(text="25-34", callback_data="age_AGE_25_34")],
-        [InlineKeyboardButton(text="35-44", callback_data="age_AGE_35_44"),
-         InlineKeyboardButton(text="45-54", callback_data="age_AGE_45_54")],
-        [InlineKeyboardButton(text="55+", callback_data="age_AGE_55_100")],
-        [InlineKeyboardButton(text="➡️ Далее", callback_data="age_done")],
-    ])
-    await m.answer("Шаг 13г — Возраст (можно несколько):", reply_markup=keyboard)
-    await state.set_state(CampaignStates.age_groups)
-
-
-@dp.callback_query(F.data.startswith("age_"))
-async def got_age(callback: types.CallbackQuery, state: FSMContext):
-    action = callback.data.replace("age_", "")
-    data = await state.get_data()
-    ages = data.get("age_groups", [])
-
-    if action == "all":
-        ages = ["AGE_18_24", "AGE_25_34", "AGE_35_44", "AGE_45_54", "AGE_55_100"]
-        await state.update_data(age_groups=ages)
-        await callback.answer(f"Выбраны все возрасты")
-    elif action == "done":
-        if not ages:
-            ages = []
-        await state.update_data(age_groups=ages)
-        await show_content_settings(callback.message, state)
-        await callback.answer()
-        return
-    else:
-        if action in ages:
-            ages.remove(action)
-        else:
-            ages.append(action)
-        await state.update_data(age_groups=ages)
-        await callback.answer(f"Выбрано: {len(ages)}")
-
-    # Обновляем клавиатуру
-    all_ages = ["AGE_18_24", "AGE_25_34", "AGE_35_44", "AGE_45_54", "AGE_55_100"]
-    labels = {"AGE_18_24": "18-24", "AGE_25_34": "25-34", "AGE_35_44": "35-44",
-              "AGE_45_54": "45-54", "AGE_55_100": "55+"}
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Выбрать все", callback_data="age_all")],
-        [InlineKeyboardButton(
-            text=f"{'✅' if a in ages else '☐'} {labels[a]}",
-            callback_data=f"age_{a}"
-        ) for a in all_ages[:2]],
-        [InlineKeyboardButton(
-            text=f"{'✅' if a in ages else '☐'} {labels[a]}",
-            callback_data=f"age_{a}"
-        ) for a in all_ages[2:4]],
-        [InlineKeyboardButton(
-            text=f"{'✅' if 'AGE_55_100' in ages else '☐'} 55+",
-            callback_data="age_AGE_55_100"
-        )],
-        [InlineKeyboardButton(text=f"➡️ Далее ({len(ages)} выбрано)", callback_data="age_done")],
-    ])
-    try:
-        await callback.message.edit_reply_markup(reply_markup=keyboard)
-    except Exception:
-        pass
-
-
-async def show_content_settings(m, state: FSMContext):
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Выкл. комментарии", callback_data="content_comments")],
-        [InlineKeyboardButton(text="✅ Выкл. скачивание", callback_data="content_download")],
-        [InlineKeyboardButton(text="✅ Выкл. репосты", callback_data="content_share")],
-        [InlineKeyboardButton(text="➡️ Далее", callback_data="content_done")],
-    ])
-    await m.answer(
-        "Шаг 13д — Настройки контента:\n(по умолчанию всё выключено; нажми чтобы включить обратно, потом Далее)",
-        reply_markup=keyboard
-    )
-    await state.update_data(comment_disabled=True, download_disabled=True, share_disabled=True)
-    await state.set_state(CampaignStates.content_settings)
-
-
-@dp.callback_query(F.data.startswith("content_"))
-async def got_content_settings(callback: types.CallbackQuery, state: FSMContext):
-    action = callback.data.replace("content_", "")
-    data = await state.get_data()
-
-    if action == "done":
-        await state.set_state(CampaignStates.video_upload)
-        await callback.message.answer(
-            "Шаг 14/17 — Отправь видео файлом (при отправке нажать галочку «Отправить как файл»; можно выбрать сразу несколько файлов и отправить одним альбомом):",
-            reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="◀️ Назад")]], resize_keyboard=True)
-        )
-        await callback.answer()
-        return
-
-    key_map = {
-        "comments": "comment_disabled",
-        "download": "download_disabled",
-        "share": "share_disabled",
-    }
-    key = key_map.get(action)
-    if key:
-        current = data.get(key, False)
-        await state.update_data(**{key: not current})
-        data[key] = not current
-
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text=f"{'✅' if data.get('comment_disabled') else '☐'} Выкл. комментарии",
-            callback_data="content_comments"
-        )],
-        [InlineKeyboardButton(
-            text=f"{'✅' if data.get('download_disabled') else '☐'} Выкл. скачивание",
-            callback_data="content_download"
-        )],
-        [InlineKeyboardButton(
-            text=f"{'✅' if data.get('share_disabled') else '☐'} Выкл. репосты",
-            callback_data="content_share"
-        )],
-        [InlineKeyboardButton(text="➡️ Далее", callback_data="content_done")],
-    ])
-    try:
-        await callback.message.edit_reply_markup(reply_markup=keyboard)
-    except Exception:
-        pass
-    await callback.answer()
-
-
-@dp.message(Command("restart"))
-async def cmd_restart(message: types.Message, state: FSMContext):
-    await state.clear()
-    await message.answer("🔄 Состояние сброшено. Начни заново с /newcampaign", reply_markup=ReplyKeyboardRemove())
-
-
-# Календарь/время в боте собирается в местном времени рекламного кабинета
-# (Минск, UTC+3), а TikTok Marketing API принимает schedule_start_time и
-# schedule_end_time в UTC (без указания таймзоны в самой строке) — если
-# отправить местное время как есть, TikTok трактует его как UTC и кампания
-# стартует на 3 часа позже реального выбора пользователя (например, выбрали
-# 15:00 — по факту в интерфейсе TikTok показывается старт в 18:00).
-# Подтверждено 2026-09-17 живым тестом.
-MINSK_UTC_OFFSET_HOURS = 3
-
-
-def to_utc_schedule(local_dt_str):
-    """Конвертирует строку 'YYYY-MM-DD HH:MM:SS' из местного времени Минска
-    (UTC+3) в UTC — в этом же строковом формате, которого ожидает TikTok API.
-    None передаёт через себя без изменений (для необязательных дат окончания)."""
-    if not local_dt_str:
-        return local_dt_str
-    local_dt = datetime.datetime.strptime(local_dt_str, "%Y-%m-%d %H:%M:%S")
-    utc_dt = local_dt - datetime.timedelta(hours=MINSK_UTC_OFFSET_HOURS)
-    return utc_dt.strftime("%Y-%m-%d %H:%M:%S")
-
-
-async def download_telegram_file(file_id, session):
-    """Скачивает файл из Telegram (по file_id) на диск, возвращает путь.
-    Вынесено в отдельную функцию, чтобы её можно было использовать и для
-    одиночной загрузки видео, и для пачечной (альбом/media_group)."""
-    import shutil
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4", dir="/tmp")
-    video_path = tmp.name
-    tmp.close()
-
-    resp = await session.get(
-        f"http://localhost:8081/bot{BOT_TOKEN}/getFile",
-        params={"file_id": file_id}
-    )
-    data = await resp.json()
-    if not data.get("ok"):
-        raise Exception(f"getFile error: {data.get('description')}")
-    file_path = data["result"]["file_path"]
-
-    # file_path — абсолютный путь ВНУТРИ контейнера (work-dir), а бот работает на хосте,
-    # где эта директория смонтирована как /root/telegram-bot-api-data
-    local_file = file_path.replace("/var/lib/telegram-bot-api", "/root/telegram-bot-api-data")
-    if os.path.exists(local_file):
-        shutil.copy2(local_file, video_path)
-    else:
-        raise Exception(f"Файл не найден: {local_file}")
-
-    return video_path
-
-
-# Буфер для пачечной загрузки видео (Telegram "альбом"): когда пользователь
-# выбирает и отправляет сразу несколько видео одним действием, Telegram
-# доставляет их боту как отдельные сообщения с общим media_group_id, но без
-# гарантии, что все части придут одним "куском" — они могут растянуться на
-# доли секунды. Debounce-таймер ждёт короткую паузу без новых сообщений в
-# группе перед тем, как считать альбом полностью полученным и обрабатывать
-# его целиком одним разом.
-_media_group_buffer: dict[str, list] = {}
-_media_group_timers: dict[str, asyncio.Task] = {}
-MEDIA_GROUP_DEBOUNCE_SECONDS = 1.5
-
-
-async def _finalize_media_group(media_group_id: str, message: types.Message, state: FSMContext):
-    await asyncio.sleep(MEDIA_GROUP_DEBOUNCE_SECONDS)
-    items = _media_group_buffer.pop(media_group_id, [])
-    _media_group_timers.pop(media_group_id, None)
-    if not items:
-        return
-
-    await message.answer(f"⏳ Скачиваю {len(items)} видео на сервер...")
-
-    data = await state.get_data()
-    videos = data.get("videos", [])
-    added = 0
-    errors = []
-    async with aiohttp.ClientSession() as session:
-        for file_id, original_filename in items:
-            try:
-                video_path = await download_telegram_file(file_id, session)
-                videos.append({
-                    "video_path": video_path,
-                    "ad_text": "",
-                    "original_filename": original_filename,
-                })
-                added += 1
-            except Exception as e:
-                errors.append(str(e))
-
-    if added == 0:
-        await message.answer(f"❌ Не удалось скачать ни одного видео из партии: {errors}\n/restart — начать заново")
-        return
-
-    await state.update_data(videos=videos, batch_pending_count=added)
-    await state.set_state(CampaignStates.ad_text)
-    keyboard = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="◀️ Назад")]], resize_keyboard=True)
-    err_note = f"\n⚠️ Не скачалось: {len(errors)} видео из партии." if errors else ""
+    found = len(filter_advertisers(get_user_advertisers(message.from_user.id), None, q))
+    head = f"🔍 Поиск «{q}» — найдено {found}" if q else "🔍 Поиск сброшен"
     await message.answer(
-        f"✅ {added} видео скачано (всего в кампании: {len(videos)}).{err_note}\n\n"
-        f"Введи текст объявления (до 100 символов) — он применится сразу ко всем {added} только что добавленным видео:",
-        reply_markup=keyboard
-    )
-
-
-@dp.message(CampaignStates.video_upload, F.media_group_id, F.video | F.document)
-async def got_campaign_video_batch(message: types.Message, state: FSMContext):
-    mgid = message.media_group_id
-    file_id = message.document.file_id if message.document else message.video.file_id
-    original_filename = message.document.file_name if message.document else None
-
-    _media_group_buffer.setdefault(mgid, []).append((file_id, original_filename))
-
-    existing_timer = _media_group_timers.get(mgid)
-    if existing_timer:
-        existing_timer.cancel()
-    _media_group_timers[mgid] = asyncio.create_task(_finalize_media_group(mgid, message, state))
-
-
-@dp.message(CampaignStates.video_upload, F.media_group_id.is_(None), F.video | F.document)
-async def got_campaign_video(message: types.Message, state: FSMContext):
-    file_id = message.document.file_id if message.document else message.video.file_id
-    # Оригинальное имя файла доступно только если видео отправлено как ФАЙЛ
-    # (📎 → Файл), а не как сжатое видео — в последнем случае Telegram имени
-    # не передаёт вовсе. Используется дальше как имя креатива при загрузке в
-    # TikTok, чтобы сведение аналитики по продажам не ломалось между итерациями.
-    original_filename = message.document.file_name if message.document else None
-
-    await message.answer("⏳ Скачиваю видео на сервер...")
-
-    try:
-        async with aiohttp.ClientSession() as session:
-            video_path = await download_telegram_file(file_id, session)
-
-        await state.update_data(video_path=video_path, original_filename=original_filename)
-        await state.set_state(CampaignStates.ad_text)
-        size = os.path.getsize(video_path)
-        data = await state.get_data()
-        videos = data.get("videos", [])
-        await message.answer(
-            f"✅ Видео {len(videos)+1} скачано ({size//1024//1024} MB)!\n\nВведи текст объявления (до 100 символов):",
-            reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="◀️ Назад")]], resize_keyboard=True)
-        )
-    except Exception as e:
-        await message.answer(f"❌ Ошибка скачивания видео: {e}\n/restart — начать заново")
-
-
-@dp.message(CampaignStates.ad_text, F.text != "◀️ Назад")
-async def got_ad_text(message: types.Message, state: FSMContext):
-    data = await state.get_data()
-    videos = data.get("videos", [])
-    batch_pending_count = data.get("batch_pending_count")
-
-    if batch_pending_count:
-        # Пачечная загрузка: видео уже добавлены в список в _finalize_media_group,
-        # текст применяется сразу ко всем только что добавленным (последним N).
-        ad_text = message.text[:100]
-        for v in videos[-batch_pending_count:]:
-            v["ad_text"] = ad_text
-        await state.update_data(videos=videos, batch_pending_count=None)
-        added_count = batch_pending_count
-    else:
-        # Одиночная загрузка (старое поведение)
-        videos.append({
-            "video_path": data.get("video_path"),
-            "ad_text": message.text[:100],
-            "original_filename": data.get("original_filename"),
-        })
-        await state.update_data(videos=videos, video_path=None, original_filename=None)
-        added_count = 1
-
-    keyboard = ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="➕ Добавить ещё видео")],
-            [KeyboardButton(text="✅ Готово, ввести URL")],
-        ],
-        resize_keyboard=True, one_time_keyboard=True
-    )
-    label = f"{added_count} видео" if added_count > 1 else "Видео"
-    await message.answer(
-        f"✅ {label} добавлено с текстом (всего: {len(videos)}).\n\nДобавить ещё видео или перейти к URL?",
-        reply_markup=keyboard
-    )
-    await state.set_state(CampaignStates.ad_url)
-
-
-@dp.message(CampaignStates.ad_url, F.text == "➕ Добавить ещё видео")
-async def add_more_video(message: types.Message, state: FSMContext):
-    await state.set_state(CampaignStates.video_upload)
-    await message.answer(
-        "Отправь следующее видео файлом:",
-        reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="◀️ Назад")]], resize_keyboard=True)
-    )
-
-
-@dp.message(CampaignStates.ad_url, F.text == "✅ Готово, ввести URL")
-async def ready_for_url(message: types.Message, state: FSMContext):
-    await message.answer(
-        "Шаг 16/17 — Ссылка на лендинг (URL):",
-        reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="◀️ Назад")]], resize_keyboard=True)
-    )
-
-
-@dp.message(CampaignStates.ad_url, F.text != "◀️ Назад", F.text != "➕ Добавить ещё видео", F.text != "✅ Готово, ввести URL")
-async def got_ad_url(message: types.Message, state: FSMContext):
-    await state.update_data(ad_url=message.text)
-    data = await state.get_data()
-    keyboard = ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="➕ Добавить ещё группу объявлений")],
-            [KeyboardButton(text="✅ Готово, к подтверждению")],
-        ],
-        resize_keyboard=True, one_time_keyboard=True
-    )
-    await message.answer(
-        f"✅ Группа «{data.get('adgroup_name', '')}» готова: {len(data.get('videos', []))} креатив(ов).\n\n"
-        f"Добавить ещё одну группу объявлений (с новым названием и своими креативами) в эту же кампанию, "
-        f"или перейти к подтверждению?",
-        reply_markup=keyboard
-    )
-    await state.set_state(CampaignStates.group_more)
-
-
-@dp.message(CampaignStates.group_more, F.text == "➕ Добавить ещё группу объявлений")
-async def add_more_group(message: types.Message, state: FSMContext):
-    data = await state.get_data()
-    groups = data.get("groups", [])
-    groups.append({
-        "adgroup_name": data.get("adgroup_name", ""),
-        "videos": data.get("videos", []),
-        "ad_url": data.get("ad_url", ""),
-        "pixel_id": data.get("pixel_id"),
-        "optimization_event": data.get("optimization_event"),
-        "lead_destination": data.get("lead_destination"),
-        "placement_type": data.get("placement_type"),
-        "placements": data.get("placements"),
-        "geo": data.get("geo"),
-        "schedule_start": data.get("schedule_start"),
-        "schedule_end": data.get("schedule_end"),
-        "bid_type": data.get("bid_type"),
-        "bid_amount": data.get("bid_amount"),
-    })
-    await state.update_data(groups=groups, videos=[], video_path=None, ad_url=None)
-    keyboard = ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="🔁 Те же настройки (плейсменты/гео/даты/ставка/пиксель)")],
-            [KeyboardButton(text="🎯 Настроить всё заново для этой группы")],
-        ],
-        resize_keyboard=True, one_time_keyboard=True
-    )
-    await message.answer(
-        f"Группа {len(groups)} сохранена.\n\n"
-        f"Для новой группы использовать те же настройки (плейсменты, гео, даты, ставка, "
-        f"пиксель/событие), или настроить всё заново специально для этой группы?",
-        reply_markup=keyboard
-    )
-    await state.set_state(CampaignStates.group_pixel_choice)
-
-
-@dp.message(CampaignStates.group_pixel_choice, F.text == "🔁 Те же настройки (плейсменты/гео/даты/ставка/пиксель)")
-async def new_group_reuse_settings(message: types.Message, state: FSMContext):
-    # Ничего из data не сбрасываем — плейсменты/гео/даты/ставка/пиксель/событие
-    # остаются от предыдущей группы и используются как fallback в цикле
-    # создания (group.get(x) or data.get(x)). Просто спрашиваем название новой
-    # группы напрямую, минуя всю цепочку шагов 8–13.
-    await state.set_state(CampaignStates.adgroup_name_reuse)
-    await message.answer(
-        "Введи название СЛЕДУЮЩЕЙ группы объявлений:",
-        reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="◀️ Назад")]], resize_keyboard=True)
-    )
-
-
-@dp.message(CampaignStates.adgroup_name_reuse, F.text != "◀️ Назад")
-async def got_adgroup_name_reuse(message: types.Message, state: FSMContext):
-    await state.update_data(adgroup_name=message.text)
-    await state.set_state(CampaignStates.video_upload)
-    await message.answer(
-        "Шаг 14/17 — Отправь видео файлом (при отправке нажать галочку «Отправить как файл»; можно выбрать сразу несколько файлов и отправить одним альбомом):",
-        reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="◀️ Назад")]], resize_keyboard=True)
-    )
-
-
-@dp.message(CampaignStates.group_pixel_choice, F.text == "🎯 Настроить всё заново для этой группы")
-async def new_group_new_pixel(message: types.Message, state: FSMContext):
-    await state.set_state(CampaignStates.adgroup_name)
-    await message.answer(
-        "Введи название СЛЕДУЮЩЕЙ группы объявлений:",
-        reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="◀️ Назад")]], resize_keyboard=True)
-    )
-
-
-@dp.message(CampaignStates.group_more, F.text == "✅ Готово, к подтверждению")
-async def finish_groups(message: types.Message, state: FSMContext):
-    data = await state.get_data()
-    groups = data.get("groups", [])
-    groups.append({
-        "adgroup_name": data.get("adgroup_name", ""),
-        "videos": data.get("videos", []),
-        "ad_url": data.get("ad_url", ""),
-        "pixel_id": data.get("pixel_id"),
-        "optimization_event": data.get("optimization_event"),
-        "lead_destination": data.get("lead_destination"),
-        "placement_type": data.get("placement_type"),
-        "placements": data.get("placements"),
-        "geo": data.get("geo"),
-        "schedule_start": data.get("schedule_start"),
-        "schedule_end": data.get("schedule_end"),
-        "bid_type": data.get("bid_type"),
-        "bid_amount": data.get("bid_amount"),
-    })
-    await state.update_data(groups=groups)
-    await show_cta_step(message, state)
-
-
-async def show_cta_step(m, state: FSMContext):
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Подробнее (Learn More)", callback_data="cta_LEARN_MORE")],
-        [InlineKeyboardButton(text="Зарегистрироваться (Sign Up)", callback_data="cta_SIGN_UP")],
-        [InlineKeyboardButton(text="Купить (Shop Now)", callback_data="cta_SHOP_NOW")],
-        [InlineKeyboardButton(text="Оставить заявку (Apply Now)", callback_data="cta_APPLY_NOW")],
-        [InlineKeyboardButton(text="Связаться (Contact Us)", callback_data="cta_CONTACT_US")],
-        [InlineKeyboardButton(text="Скачать (Download)", callback_data="cta_DOWNLOAD_NOW")],
-        [InlineKeyboardButton(text="➡️ Далее (оставить Подробнее)", callback_data="cta_LEARN_MORE")],
-    ])
-    await m.answer("Шаг 16б — Призыв к действию (Call to Action) на объявлении:", reply_markup=keyboard)
-    await state.set_state(CampaignStates.call_to_action)
+        f"{head}\nВыбрано: {len(data.get('selected_advertisers', []))}",
+        reply_markup=await render_adv_keyboard(state, message.from_user.id))
 
 
 @dp.callback_query(F.data.startswith("cta_"))
@@ -2133,7 +1284,9 @@ async def got_cta(callback: types.CallbackQuery, state: FSMContext):
         f"📁 Кабинетов: {len(selected)}\n\n" +
         "\n".join(f"• {n}" for n in names)
     )
-    await callback.message.answer(text, reply_markup=build_confirm_keyboard(selected, get_user_advertisers(callback.from_user.id)))
+    await state.update_data(adv_mode="confirm", adv_family=None, adv_query="",
+                            adv_page=0, adv_only_selected=True)
+    await callback.message.answer(text, reply_markup=await render_adv_keyboard(state, callback.from_user.id))
 
 
 @dp.callback_query(F.data == "create_campaign")
@@ -2733,7 +1886,10 @@ async def show_step(state, msg_or_cb, step_name):
         selected = data.get("selected_advertisers", [])
         await state.set_state(CampaignStates.select_advertisers)
         user_id = msg_or_cb.from_user.id
-        await m.answer("Шаг 1/17 — Выбери рекламные кабинеты:", reply_markup=build_advertisers_keyboard(selected, get_user_advertisers(user_id)))
+        await state.update_data(adv_mode="select", adv_family=None, adv_query="",
+                                adv_page=0, adv_only_selected=False)
+        await m.answer(f"Шаг 1/17 — Выбери рекламные кабинеты.\n{ADV_SEARCH_HINT}", parse_mode="Markdown",
+                       reply_markup=await render_adv_keyboard(state, user_id))
 
     elif step_name == "campaign_name":
         await state.set_state(CampaignStates.campaign_name)
