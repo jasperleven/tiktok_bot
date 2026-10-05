@@ -154,6 +154,33 @@ BC_ACCOUNTS = {
     "Настя": BC_NASTYA,
 }
 
+CUSTOM_ADVERTISERS_FILE = "custom_advertisers.json"
+
+
+def load_custom_advertisers():
+    """Кабинеты, добавленные через бота (кнопка «➕ Добавить кабинет»)."""
+    if os.path.exists(CUSTOM_ADVERTISERS_FILE):
+        try:
+            with open(CUSTOM_ADVERTISERS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+
+def save_custom_advertiser(bc_name, adv_id, name):
+    custom = load_custom_advertisers()
+    custom.setdefault(bc_name, {})[adv_id] = name
+    with open(CUSTOM_ADVERTISERS_FILE, "w", encoding="utf-8") as f:
+        json.dump(custom, f, ensure_ascii=False, indent=2)
+    BC_ACCOUNTS[bc_name][adv_id] = name
+    ALL_ADVERTISERS[adv_id] = name
+
+
+for _bc, _items in load_custom_advertisers().items():
+    if _bc in BC_ACCOUNTS:
+        BC_ACCOUNTS[_bc].update(_items)
+
 ALL_ADVERTISERS = {**BC_VLAD, **BC_NASTYA}
 
 
@@ -377,6 +404,7 @@ class CampaignStates(StatesGroup):
     ad_text            = State()
     ad_url             = State()
     call_to_action     = State()
+    add_advertiser     = State()
 
 
 # ─── Утилиты ─────────────────────────────────────────────────────────────────
@@ -552,6 +580,7 @@ async def publish_video_to_tiktok(identity, video_path, title, session, base_url
 # ─── Выбор кабинетов: группы со значками + поиск по названию ─────────────────
 
 ADV_PAGE_SIZE = 12
+ADV_TWO_COL_MAX = 13  # длиннее — кнопка кабинета занимает всю строку
 
 ADV_FAMILIES = [
     ("cool",   "🧊 cool-shop",   r"cool"),
@@ -639,8 +668,10 @@ def build_adv_keyboard(advertisers, selected, family=None, query="", page=0,
             callback_data=f"adv_{a}")
         for a, n in chunk
     ]
-    for i in range(0, len(btns), 2):
-        rows.append(btns[i:i + 2])
+    # Длинные названия в две колонки обрезаются на телефоне — тогда по одному в ряд
+    cols = 2 if all(len(adv_short_name(n)) <= ADV_TWO_COL_MAX for _, n in chunk) else 1
+    for i in range(0, len(btns), cols):
+        rows.append(btns[i:i + cols])
     if not items:
         rows.append([InlineKeyboardButton(text="— ничего не найдено —", callback_data="cal_noop")])
 
@@ -652,8 +683,8 @@ def build_adv_keyboard(advertisers, selected, family=None, query="", page=0,
         ])
 
     rows.append([
-        InlineKeyboardButton(text=f"✅ Выбрать видимые ({len(items)})", callback_data="advvis_all"),
-        InlineKeyboardButton(text="❌ Снять видимые", callback_data="advvis_none"),
+        InlineKeyboardButton(text=f"✅ Все ({len(items)})", callback_data="advvis_all"),
+        InlineKeyboardButton(text="❌ Снять", callback_data="advvis_none"),
     ])
     if selected:
         rows.append([InlineKeyboardButton(text="🧹 Снять все выбранные", callback_data="advsel_clear")])
@@ -661,6 +692,7 @@ def build_adv_keyboard(advertisers, selected, family=None, query="", page=0,
     if mode == "confirm":
         rows.append([InlineKeyboardButton(text="🚀 Создать кампанию", callback_data="create_campaign")])
     else:
+        rows.append([InlineKeyboardButton(text="➕ Добавить кабинет", callback_data="advnew")])
         rows.append([InlineKeyboardButton(text=f"➡️ Далее ({len(selected)})", callback_data="advertisers_done")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -1243,6 +1275,101 @@ async def adv_bulk(callback: types.CallbackQuery, state: FSMContext):
     await state.update_data(selected_advertisers=selected)
     await refresh_adv_keyboard(callback, state)
     await callback.answer(msg)
+
+
+# ─── Добавление нового кабинета из бота ──────────────────────────────────────
+
+async def fetch_advertiser_names(adv_ids, token):
+    """Проверяет доступ токена к кабинетам и возвращает {id: название}."""
+    async with aiohttp.ClientSession() as session:
+        async with session.get(
+            "https://business-api.tiktok.com/open_api/v1.3/advertiser/info/",
+            params={"advertiser_ids": json.dumps(adv_ids), "fields": json.dumps(["advertiser_id", "name"])},
+            headers={"Access-Token": token},
+        ) as resp:
+            res = await resp.json()
+    if res.get("code") != 0:
+        raise Exception(res.get("message", "ошибка TikTok API"))
+    return {str(i["advertiser_id"]): i.get("name", "") for i in res.get("data", {}).get("list", [])}
+
+
+@dp.callback_query(F.data == "advnew")
+async def adv_new_start(callback: types.CallbackQuery, state: FSMContext):
+    await state.set_state(CampaignStates.add_advertiser)
+    await callback.message.answer(
+        f"➕ *Новый кабинет в БЦ {get_user_bc(callback.from_user.id)}*\n\n"
+        "Пришли название и ID кабинета одной строкой:\n"
+        "`WGC-M-S-cool-shop-29 7693093773911392277`\n\n"
+        "Можно несколько кабинетов — каждый с новой строки.\n"
+        "Название пиши как в TikTok (`WGC-M-S-...`): по нему бот сам определит группу и значок "
+        "(🧊 cool-shop, 🌱 dacha, ⚙️ technowave, 🅰️ alfa, 🛠 techshop, 📈 mega-techno, 🛍 online-sale).",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="◀️ Отмена", callback_data="advnew_cancel")]]))
+    await callback.answer()
+
+
+async def _back_to_adv_select(m, state: FSMContext, user_id, text):
+    await state.set_state(CampaignStates.select_advertisers)
+    await state.update_data(adv_family=None, adv_query="", adv_page=0, adv_only_selected=False, adv_mode="select")
+    await m.answer(text, reply_markup=await render_adv_keyboard(state, user_id))
+
+
+@dp.callback_query(F.data == "advnew_cancel")
+async def adv_new_cancel(callback: types.CallbackQuery, state: FSMContext):
+    await _back_to_adv_select(callback.message, state, callback.from_user.id,
+                              "Шаг 1/17 — Выбери рекламные кабинеты:")
+    await callback.answer()
+
+
+@dp.message(CampaignStates.add_advertiser, F.text, F.text != "◀️ Назад", ~F.text.startswith("/"))
+async def adv_new_save(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    bc_name = get_user_bc(user_id)
+    if bc_name not in BC_ACCOUNTS:
+        bc_name = "Влад"
+    advertisers = BC_ACCOUNTS[bc_name]
+
+    wanted, bad = {}, []
+    for line in message.text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        m = re.search(r"(?<!\d)\d{15,20}(?!\d)", line)
+        if m:
+            # ID может стоять до или после названия
+            wanted[m.group(0)] = (line[:m.start()] + " " + line[m.end():]).strip(" \t,;:|-—")
+        else:
+            bad.append(line)
+    if not wanted:
+        await message.answer("Не вижу ID кабинета. Пришли в таком виде:\n`WGC-M-S-cool-shop-29 7693093773911392277`",
+                             parse_mode="Markdown")
+        return
+
+    token = MARKETING_TOKEN_NASTYA if bc_name == "Настя" else MARKETING_TOKEN
+    try:
+        names = await fetch_advertiser_names(list(wanted), token)
+    except Exception as e:
+        await message.answer(f"❌ TikTok не дал проверить кабинеты: {e}\nНичего не добавлено. Попробуй ещё раз или нажми «Отмена».")
+        return
+
+    report = []
+    for adv_id, custom_name in wanted.items():
+        if adv_id in advertisers:
+            report.append(f"ℹ️ {advertisers[adv_id]} — уже есть")
+        elif adv_id not in names:
+            report.append(f"❌ {adv_id} — у токена БЦ {bc_name} нет доступа к этому кабинету, не добавлен")
+        else:
+            name = custom_name or names[adv_id] or adv_id
+            save_custom_advertiser(bc_name, adv_id, name)
+            fam = adv_family(name)
+            fam_label = next(l for k, l, _ in ADV_FAMILIES if k == fam)
+            note = f" (TikTok: {names[adv_id]})" if custom_name and names[adv_id] and names[adv_id] != custom_name else ""
+            report.append(f"✅ {name} — добавлен в группу {fam_label}{note}")
+    report += [f"⚠️ не понял строку: {b}" for b in bad]
+
+    await _back_to_adv_select(message, state, user_id,
+                              "\n".join(report) + "\n\nШаг 1/17 — Выбери рекламные кабинеты:")
 
 
 # Поиск по названию: пользователь пишет часть названия в чат
@@ -2975,6 +3102,11 @@ async def show_step(state, msg_or_cb, step_name):
             resize_keyboard=True, one_time_keyboard=True
         )
         await m.answer("Шаг 12/17 — Ставка:", reply_markup=keyboard)
+
+    elif step_name == "bid_amount":
+        await state.set_state(CampaignStates.bid_amount)
+        kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="◀️ Назад")]], resize_keyboard=True)
+        await m.answer("Шаг 12/17 — Введи ставку (USD):", reply_markup=kb)
 
     elif step_name == "pixel_search":
         await state.set_state(CampaignStates.pixel_search)
