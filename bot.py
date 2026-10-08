@@ -270,6 +270,89 @@ def get_token_for_advertiser(advertiser_id: str) -> str:
         return MARKETING_TOKEN_NASTYA
     return MARKETING_TOKEN
 
+# ─── Обложка из самого видео ─────────────────────────────────────────────────
+# Кадр вырезается на сервере через ffmpeg и грузится в TikTok картинкой — не ждём,
+# пока TikTok сам сгенерирует превью (на пачках видео он не успевал, и объявления
+# терялись с "не удалось загрузить обложку видео").
+
+COVER_FRAME_SECOND = 1  # с какой секунды брать кадр (самый первый часто чёрный)
+
+
+def _find_ffmpeg():
+    import shutil as _sh
+    path = _sh.which("ffmpeg")
+    if path:
+        return path
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return None
+
+
+async def extract_cover_frame(video_path):
+    """Возвращает (jpeg_bytes, None) или (None, причина)."""
+    ffmpeg = _find_ffmpeg()
+    if not ffmpeg:
+        return None, "ffmpeg не установлен на сервере"
+    out_path = f"{video_path}.cover.jpg"
+    last_err = ""
+    try:
+        for second in (COVER_FRAME_SECOND, 0):  # если ролик короче — берём первый кадр
+            proc = await asyncio.create_subprocess_exec(
+                ffmpeg, "-y", "-loglevel", "error", "-ss", str(second), "-i", video_path,
+                "-frames:v", "1", "-q:v", "2", out_path,
+                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
+            try:
+                _, err = await asyncio.wait_for(proc.communicate(), timeout=60)
+            except asyncio.TimeoutError:
+                proc.kill()
+                last_err = "ffmpeg завис"
+                continue
+            if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
+                with open(out_path, "rb") as f:
+                    return f.read(), None
+            last_err = (err or b"").decode(errors="ignore").strip()[-200:] or "ffmpeg не вернул кадр"
+        return None, last_err
+    except Exception as e:
+        return None, f"ffmpeg: {e}"
+    finally:
+        try:
+            os.remove(out_path)
+        except Exception:
+            pass
+
+
+async def upload_cover_from_video(session, base_url, advertiser_id, video_path, label=""):
+    """Вырезает кадр из видео и загружает его в TikTok. Возвращает (image_id, None) или (None, причина)."""
+    img, err = await extract_cover_frame(video_path)
+    if not img:
+        await log_api(f"COVER FRAME FAILED {label}", {"advertiser_id": advertiser_id, "video_path": video_path}, {"error": err})
+        return None, f"кадр из видео — {err}"
+    sig = hashlib.md5(img).hexdigest()
+    res = {}
+    for attempt in range(3):
+        form = aiohttp.FormData()
+        form.add_field("advertiser_id", advertiser_id)
+        form.add_field("upload_type", "UPLOAD_BY_FILE")
+        form.add_field("image_signature", sig)
+        # уникальное имя на каждую попытку — иначе TikTok ругается на дубликат имени
+        fname = f"cover_{sig[:12]}_{int(time.time() * 1000) % 100000}.jpg"
+        form.add_field("file_name", fname)
+        form.add_field("image_file", img, filename=fname, content_type="image/jpeg")
+        try:
+            resp = await session.post(f"{base_url}/file/image/ad/upload/", data=form,
+                                      headers={"Access-Token": get_token_for_advertiser(advertiser_id)})
+            res = await resp.json()
+        except Exception as e:
+            res = {"code": -1, "message": str(e)}
+        if res.get("code") == 0 and (res.get("data") or {}).get("image_id"):
+            return res["data"]["image_id"], None
+        await log_api(f"COVER FILE UPLOAD FAILED {label} (attempt {attempt + 1})", {"advertiser_id": advertiser_id, "file_name": fname}, res)
+        await asyncio.sleep(3 * (attempt + 1))
+    return None, f"загрузка кадра — {res.get('message')}"
+
+
 OBJECTIVES = {
     "🎯 Охват": "REACH",
     "🌐 Трафик": "TRAFFIC",
@@ -2543,9 +2626,14 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
             # Не доверяем video_cover_url из немедленного ответа — превью TikTok
             # генерирует асинхронно, слишком ранняя ссылка даёт битую обложку.
             # Всегда перепроверяем через video/ad/search с задержкой.
+            # Основной путь: обложка = кадр из самого видео (без ожидания TikTok)
+            web_uri, own_fail = await upload_cover_from_video(session, base_url, advertiser_id, video_path)
+
+            # Запасной путь: превью, которое генерирует TikTok
             video_cover_url = None
-            await asyncio.sleep(5)
-            for _ in range(8):
+            if not web_uri:
+                await asyncio.sleep(5)
+            for _ in range(0 if web_uri else 18):
                 search_resp = await session.get(
                     f"{base_url}/file/video/ad/search/",
                     params={
@@ -2555,15 +2643,13 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                     headers=headers
                 )
                 search_data = await search_resp.json()
-                videos = search_data.get("data", {}).get("list", [])
+                videos = (search_data.get("data") or {}).get("list", [])
                 if videos and videos[0].get("video_cover_url"):
                     video_cover_url = videos[0]["video_cover_url"]
                     break
                 await asyncio.sleep(10)
 
-            # Загружаем обложку
-            web_uri = None
-            if video_cover_url:
+            if video_cover_url and not web_uri:
                 cover_resp = await session.post(
                     f"{base_url}/file/image/ad/upload/",
                     json={"advertiser_id": advertiser_id, "upload_type": "UPLOAD_BY_URL", "image_url": video_cover_url},
@@ -2574,7 +2660,7 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                     web_uri = cover_data["data"]["image_id"]
 
             if not web_uri:
-                return False, "Не удалось загрузить обложку видео"
+                return False, f"Не удалось загрузить обложку видео ({own_fail})"
 
             if objective == "LEAD_GENERATION":
                 # ── Smart+ flow ───────────────────────────────────────────────
@@ -2789,32 +2875,47 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                         # получается битой (подтверждено: у объявлений через бота обложки
                         # выходили полосатыми/повреждёнными). Всегда перепроверяем через
                         # video/ad/search с небольшой задержкой перед первой попыткой.
+                        # Основной путь: обложка = кадр из самого видео (без ожидания TikTok)
+                        vid_web_uri, own_fail = await upload_cover_from_video(
+                            session, base_url, advertiser_id, vid_path, f"(group {group_name} #{i+1})")
+
+                        # Запасной путь: превью, которое генерирует TikTok
                         vid_cover_url = None
-                        await asyncio.sleep(5)
-                        for _ in range(8):
+                        cover_fail = "TikTok не сгенерировал превью за 3 мин"
+                        sd = {}
+                        if not vid_web_uri:
+                            await asyncio.sleep(5)
+                        for _ in range(0 if vid_web_uri else 18):
                             sr = await session.get(f"{base_url}/file/video/ad/search/",
                                 params={"advertiser_id": advertiser_id, "filtering": f'{{"video_ids":["{vid_id}"]}}'},
                                 headers=headers)
                             sd = await sr.json()
-                            vlist = sd.get("data", {}).get("list", [])
+                            vlist = (sd.get("data") or {}).get("list", [])
                             if vlist and vlist[0].get("video_cover_url"):
                                 vid_cover_url = vlist[0]["video_cover_url"]
                                 break
                             await asyncio.sleep(10)
+                        if not vid_cover_url and not vid_web_uri:
+                            if sd.get("code") not in (0, None):
+                                cover_fail = f"video/ad/search — {sd.get('message')}"
+                            await log_api(f"COVER SEARCH FAILED (group {group_name})", {"advertiser_id": advertiser_id, "video_id": vid_id}, sd)
 
-                        # Ищем обложку
-                        vid_web_uri = None
-
-                        if vid_cover_url:
-                            cr = await session.post(f"{base_url}/file/image/ad/upload/",
-                                json={"advertiser_id": advertiser_id, "upload_type": "UPLOAD_BY_URL", "image_url": vid_cover_url},
-                                headers=headers)
-                            cd = await cr.json()
-                            if cd.get("code") == 0:
-                                vid_web_uri = cd["data"]["image_id"]
+                        if vid_cover_url and not vid_web_uri:
+                            # До 3 попыток: загрузка картинки по URL иногда падает по таймауту/лимиту
+                            for attempt in range(3):
+                                cr = await session.post(f"{base_url}/file/image/ad/upload/",
+                                    json={"advertiser_id": advertiser_id, "upload_type": "UPLOAD_BY_URL", "image_url": vid_cover_url},
+                                    headers=headers)
+                                cd = await cr.json()
+                                if cd.get("code") == 0:
+                                    vid_web_uri = cd["data"]["image_id"]
+                                    break
+                                cover_fail = f"image/ad/upload — {cd.get('message')}"
+                                await log_api(f"COVER UPLOAD FAILED (group {group_name}, attempt {attempt + 1})", {"advertiser_id": advertiser_id, "video_id": vid_id, "image_url": vid_cover_url}, cd)
+                                await asyncio.sleep(5 * (attempt + 1))
 
                         if not vid_web_uri:
-                            group_errors.append(f"{group_name} #{i+1}: не удалось загрузить обложку видео")
+                            group_errors.append(f"{group_name} #{i+1}: не удалось загрузить обложку видео ({own_fail}; {cover_fail})")
                             continue
 
                         ci = {
