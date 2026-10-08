@@ -1982,6 +1982,13 @@ async def get_pixel_events(advertiser_id, pixel_id):
 
 
 
+# Кампании бот всегда создаёт как лидогенерацию. Продажные события пикселя
+# (INITIATE_ORDER, SHOPPING, COMPLETE_PAYMENT, ADD_TO_CART и т.п.) TikTok для неё
+# отклоняет на создании группы общей ошибкой 40002 "Something went wrong" —
+# поэтому показываем только события-заявки.
+LEAD_PIXEL_EVENTS = {"FORM", "SUBMIT_APPLICATION", "ON_WEB_REGISTER", "CONSULT", "ON_WEB_ORDER"}
+
+
 async def show_pixel_event(m, state: FSMContext):
     data = await state.get_data()
     pixel_id = data.get("pixel_id")
@@ -1993,6 +2000,16 @@ async def show_pixel_event(m, state: FSMContext):
     real_events = None
     if pixel_id and check_advertiser_id:
         real_events = await get_pixel_events(check_advertiser_id, pixel_id)
+        if real_events is not None:
+            hidden = [k for k, _ in real_events if k not in LEAD_PIXEL_EVENTS]
+            real_events = [(k, l) for k, l in real_events if k in LEAD_PIXEL_EVENTS]
+            if not real_events:
+                await m.answer(
+                    "⚠️ У этого пикселя нет событий для лидогенерации (заявка, форма, контакт, регистрация)."
+                    + (f"\nЕсть только: {', '.join(hidden)} — для лид-кампании TikTok их не принимает." if hidden else "")
+                    + "\nПропусти событие или начни заново /newcampaign с другим пикселем."
+                )
+                await state.update_data(verified_pixel_events=[], verified_pixel_events_for=pixel_id)
 
     if real_events:
         for key, label in real_events:
@@ -2015,7 +2032,6 @@ async def show_pixel_event(m, state: FSMContext):
         rows = [
             [InlineKeyboardButton(text=form_label, callback_data="event_FORM")],
             [InlineKeyboardButton(text="🌐 Заявка на сайте", callback_data="event_SUBMIT_APPLICATION")],
-            [InlineKeyboardButton(text="🛒 Покупка", callback_data="event_SHOPPING")],
             [InlineKeyboardButton(text="📝 Регистрация", callback_data="event_ON_WEB_REGISTER")],
             [InlineKeyboardButton(text="📞 Контакт", callback_data="event_CONSULT")],
         ]
