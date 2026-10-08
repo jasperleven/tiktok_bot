@@ -1817,8 +1817,101 @@ async def got_lead_destination(callback: types.CallbackQuery, state: FSMContext)
     await state.update_data(lead_destination=dest)
     label = "🌐 На сайт" if dest == "WEBSITE" else "📱 Мгновенная форма TikTok"
     await callback.message.answer(f"✅ Назначение: {label}")
-    await show_pixel_event(callback.message, state)
     await callback.answer()
+    if dest == "INSTANT_FORM":
+        await state.update_data(instant_form_title=None, instant_form_ids=None)
+        await show_instant_forms(callback.message, state)
+        return
+    await state.update_data(instant_form_title=None, instant_form_ids=None)
+    await show_pixel_event(callback.message, state)
+
+
+# ─── Мгновенная форма TikTok: выбор формы ────────────────────────────────────
+# Объявлению с мгновенной формой TikTok нужна конкретная форма (page_id), созданная
+# заранее в Ads Manager. Формы живут в каждом кабинете отдельно, поэтому выбираем
+# форму по НАЗВАНИЮ и в каждом кабинете берём форму с этим названием.
+
+async def fetch_instant_forms(advertiser_id):
+    """[(page_id, title), ...] опубликованных мгновенных форм кабинета, или None при ошибке."""
+    try:
+        async with aiohttp.ClientSession() as session:
+            resp = await session.get(
+                "https://business-api.tiktok.com/open_api/v1.3/page/get/",
+                params={"advertiser_id": advertiser_id, "page_size": 100},
+                headers={"Access-Token": get_token_for_advertiser(advertiser_id)})
+            res = await resp.json()
+        if res.get("code") != 0:
+            return None
+        out = []
+        for p in (res.get("data") or {}).get("list", []):
+            if p.get("status") not in (None, "PUBLISHED"):
+                continue
+            title = (p.get("title") or p.get("page_name") or "").strip()
+            if title and p.get("page_id"):
+                out.append((str(p["page_id"]), title))
+        return out
+    except Exception:
+        return None
+
+
+async def show_instant_forms(m, state: FSMContext):
+    data = await state.get_data()
+    selected = data.get("selected_advertisers", [])
+    await m.answer("🔍 Ищу мгновенные формы в выбранных кабинетах...")
+    by_title = {}   # название -> {advertiser_id: page_id}
+    failed = []
+    for adv in selected:
+        forms = await fetch_instant_forms(adv)
+        if forms is None:
+            failed.append(ALL_ADVERTISERS.get(adv, adv))
+            continue
+        for pid, title in forms:
+            by_title.setdefault(title, {}).setdefault(adv, pid)
+
+    if not by_title:
+        await m.answer(
+            "❌ В выбранных кабинетах нет ни одной опубликованной мгновенной формы.\n"
+            "Создай форму в TikTok Ads Manager (Инструменты → Мгновенные формы) в каждом кабинете "
+            "или выбери «🌐 На сайт»."
+            + (f"\n⚠️ Не удалось проверить: {', '.join(failed)}" if failed else ""))
+        await show_lead_destination(m, state)
+        return
+
+    choices = sorted(by_title.items(), key=lambda x: (-len(x[1]), x[0].lower()))[:40]
+    await state.update_data(instant_form_choices=[[t, ids] for t, ids in choices])
+    n = len(selected)
+    rows = [[InlineKeyboardButton(text=f"{t[:45]} ({len(ids)}/{n})", callback_data=f"iform_{i}")]
+            for i, (t, ids) in enumerate(choices)]
+    rows.append([InlineKeyboardButton(text="◀️ Назад к выбору назначения", callback_data="iform_back")])
+    await m.answer(
+        "Шаг 13а.2 — Выбери мгновенную форму.\n"
+        f"В скобках — в скольких кабинетах из {n} есть форма с таким названием. "
+        "Кабинеты без неё будут пропущены при создании."
+        + (f"\n⚠️ Не удалось проверить: {', '.join(failed)}" if failed else ""),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+
+
+@dp.callback_query(F.data.startswith("iform_"))
+async def got_instant_form(callback: types.CallbackQuery, state: FSMContext):
+    key = callback.data.replace("iform_", "")
+    await callback.answer()
+    if key == "back":
+        await show_lead_destination(callback.message, state)
+        return
+    data = await state.get_data()
+    choices = data.get("instant_form_choices") or []
+    try:
+        title, ids = choices[int(key)]
+    except (ValueError, IndexError):
+        await callback.message.answer("Список форм устарел — выбери назначение заново.")
+        await show_lead_destination(callback.message, state)
+        return
+    await state.update_data(instant_form_title=title, instant_form_ids=ids)
+    selected = data.get("selected_advertisers", [])
+    missing = [ALL_ADVERTISERS.get(a, a) for a in selected if a not in ids]
+    note = (f"\n⚠️ Нет этой формы в кабинетах (они будут пропущены): {', '.join(missing)}" if missing else "")
+    await callback.message.answer(f"✅ Мгновенная форма: {title} — {len(ids)} из {len(selected)} кабинетов{note}")
+    await show_pixel_event(callback.message, state)
 
 
 @dp.callback_query(F.data == "pixel_skip")
@@ -2385,6 +2478,8 @@ async def add_more_group(message: types.Message, state: FSMContext):
         "pixel_id": data.get("pixel_id"),
         "optimization_event": data.get("optimization_event"),
         "lead_destination": data.get("lead_destination"),
+        "instant_form_title": data.get("instant_form_title"),
+        "instant_form_ids": data.get("instant_form_ids"),
         "placement_type": data.get("placement_type"),
         "placements": data.get("placements"),
         "geo": data.get("geo"),
@@ -2453,6 +2548,8 @@ async def finish_groups(message: types.Message, state: FSMContext):
         "pixel_id": data.get("pixel_id"),
         "optimization_event": data.get("optimization_event"),
         "lead_destination": data.get("lead_destination"),
+        "instant_form_title": data.get("instant_form_title"),
+        "instant_form_ids": data.get("instant_form_ids"),
         "placement_type": data.get("placement_type"),
         "placements": data.get("placements"),
         "geo": data.get("geo"),
@@ -2716,6 +2813,8 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                     "pixel_id": data.get("pixel_id"),
                     "optimization_event": data.get("optimization_event"),
                     "lead_destination": data.get("lead_destination"),
+                    "instant_form_title": data.get("instant_form_title"),
+                    "instant_form_ids": data.get("instant_form_ids"),
                     "placement_type": data.get("placement_type"),
                     "placements": data.get("placements"),
                     "geo": data.get("geo"),
@@ -2994,23 +3093,37 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                             sp_ad_payload["ad_configuration"] = ad_config
                             ad_payloads = [sp_ad_payload]
                         else:
-                            # Мгновенная форма TikTok: в одном объявлении может быть только
-                            # одна форма, и несколько креативов в одном объявлении TikTok
-                            # отклоняет ("This ad only supports one Instant Page or Instant
-                            # Form"). Поэтому, как раньше (успешные запуски 04–07.09):
-                            # одно объявление на каждое видео и без ad_configuration.
-                            ad_payloads = []
-                            for k, cr in enumerate(group_creative_list, start=1):
+                            # Мгновенная форма TikTok: объявлению нужна конкретная форма
+                            # кабинета (page_list), ссылку на лендинг не передаём.
+                            form_ids = group.get("instant_form_ids") or data.get("instant_form_ids") or {}
+                            form_title = group.get("instant_form_title") or data.get("instant_form_title") or ""
+                            page_id = form_ids.get(str(advertiser_id))
+                            if not page_id:
+                                group_errors.append(f"{group_name}: в кабинете нет мгновенной формы «{form_title}» — создай её в Ads Manager")
+                                ad_payloads = []
+                            else:
                                 p = dict(sp_ad_payload)
-                                p["ad_name"] = f"{group_name} #{k}"
-                                p["creative_list"] = [cr]
-                                ad_payloads.append(p)
+                                p["page_list"] = [{"page_id": page_id}]
+                                p["landing_page_url_list"] = []
+                                ad_payloads = [p]
                         for p in ad_payloads:
                             sp_ad_resp = await session.post(f"{base_url}/smart_plus/ad/create/", json=p, headers=headers)
                             sp_ad_data = await sp_ad_resp.json()
                             await log_api("SMART+ AD CREATE", p, sp_ad_data)
                             if sp_ad_data.get("code") == 0:
                                 total_ad_ids.append(sp_ad_data["data"]["smart_plus_ad_id"])
+                            elif p.get("page_list") and len(p["creative_list"]) > 1:
+                                # Запасной путь: если TikTok не принимает несколько видео в одном
+                                # объявлении с формой — создаём по объявлению на каждое видео.
+                                for k, cr in enumerate(p["creative_list"], start=1):
+                                    one = dict(p, ad_name=f"{group_name} #{k}", creative_list=[cr])
+                                    r1 = await session.post(f"{base_url}/smart_plus/ad/create/", json=one, headers=headers)
+                                    d1 = await r1.json()
+                                    await log_api("SMART+ AD CREATE (по одному видео)", one, d1)
+                                    if d1.get("code") == 0:
+                                        total_ad_ids.append(d1["data"]["smart_plus_ad_id"])
+                                    else:
+                                        group_errors.append(f"{group_name} #{k}: {d1.get('message')}")
                             else:
                                 group_errors.append(f"{p['ad_name']}: {sp_ad_data.get('message')}")
 
