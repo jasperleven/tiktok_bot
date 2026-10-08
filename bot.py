@@ -2952,7 +2952,10 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                             "ad_name": group_name,
                             "creative_list": group_creative_list,
                             "ad_text_list": [{"ad_text": t} for t in group_ad_texts_seen] or [{"ad_text": ""}],
-                            "landing_page_url_list": [{"landing_page_url": group_ad_url}] if group_ad_url else [],
+                            # Для мгновенной формы TikTok ссылку на лендинг НЕ передаём: форма уже
+                            # и есть "страница" объявления, а ссылка считается второй —
+                            # "This ad only supports one Instant Page or Instant Form".
+                            "landing_page_url_list": [{"landing_page_url": group_ad_url}] if (group_ad_url and is_website_lead) else [],
                             "call_to_action_list": [{"call_to_action": data.get("call_to_action", "LEARN_MORE")}],
                         }
                         # creative_auto_add_toggle — согласно официальной документации
@@ -2985,7 +2988,7 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                         # интерфейс показывает "No URL parameters" и подстановка макросов
                         # (__CLICKID__, __CAMPAIGN_ID__ и т.д.) может работать некорректно.
                         # Подтверждено сравнением реального объявления, созданного вручную.
-                        if group_ad_url:
+                        if group_ad_url and is_website_lead:
                             parsed_url = urlparse(group_ad_url)
                             query_params = parse_qsl(parsed_url.query, keep_blank_values=True)
                             if query_params:
