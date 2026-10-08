@@ -2952,10 +2952,7 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                             "ad_name": group_name,
                             "creative_list": group_creative_list,
                             "ad_text_list": [{"ad_text": t} for t in group_ad_texts_seen] or [{"ad_text": ""}],
-                            # Для мгновенной формы TikTok ссылку на лендинг НЕ передаём: форма уже
-                            # и есть "страница" объявления, а ссылка считается второй —
-                            # "This ad only supports one Instant Page or Instant Form".
-                            "landing_page_url_list": [{"landing_page_url": group_ad_url}] if (group_ad_url and is_website_lead) else [],
+                            "landing_page_url_list": [{"landing_page_url": group_ad_url}] if group_ad_url else [],
                             "call_to_action_list": [{"call_to_action": data.get("call_to_action", "LEARN_MORE")}],
                         }
                         # creative_auto_add_toggle — согласно официальной документации
@@ -2988,19 +2985,34 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                         # интерфейс показывает "No URL parameters" и подстановка макросов
                         # (__CLICKID__, __CAMPAIGN_ID__ и т.д.) может работать некорректно.
                         # Подтверждено сравнением реального объявления, созданного вручную.
-                        if group_ad_url and is_website_lead:
+                        if group_ad_url:
                             parsed_url = urlparse(group_ad_url)
                             query_params = parse_qsl(parsed_url.query, keep_blank_values=True)
                             if query_params:
                                 ad_config["utm_params"] = [{"key": k, "value": v} for k, v in query_params]
-                        sp_ad_payload["ad_configuration"] = ad_config
-                        sp_ad_resp = await session.post(f"{base_url}/smart_plus/ad/create/", json=sp_ad_payload, headers=headers)
-                        sp_ad_data = await sp_ad_resp.json()
-                        await log_api("SMART+ AD CREATE", sp_ad_payload, sp_ad_data)
-                        if sp_ad_data.get("code") == 0:
-                            total_ad_ids.append(sp_ad_data["data"]["smart_plus_ad_id"])
+                        if is_website_lead:
+                            sp_ad_payload["ad_configuration"] = ad_config
+                            ad_payloads = [sp_ad_payload]
                         else:
-                            group_errors.append(f"{group_name}: {sp_ad_data.get('message')}")
+                            # Мгновенная форма TikTok: в одном объявлении может быть только
+                            # одна форма, и несколько креативов в одном объявлении TikTok
+                            # отклоняет ("This ad only supports one Instant Page or Instant
+                            # Form"). Поэтому, как раньше (успешные запуски 04–07.09):
+                            # одно объявление на каждое видео и без ad_configuration.
+                            ad_payloads = []
+                            for k, cr in enumerate(group_creative_list, start=1):
+                                p = dict(sp_ad_payload)
+                                p["ad_name"] = f"{group_name} #{k}"
+                                p["creative_list"] = [cr]
+                                ad_payloads.append(p)
+                        for p in ad_payloads:
+                            sp_ad_resp = await session.post(f"{base_url}/smart_plus/ad/create/", json=p, headers=headers)
+                            sp_ad_data = await sp_ad_resp.json()
+                            await log_api("SMART+ AD CREATE", p, sp_ad_data)
+                            if sp_ad_data.get("code") == 0:
+                                total_ad_ids.append(sp_ad_data["data"]["smart_plus_ad_id"])
+                            else:
+                                group_errors.append(f"{p['ad_name']}: {sp_ad_data.get('message')}")
 
                 if not total_ad_ids:
                     # Ни одной группы/объявления не создалось — удаляем пустую кампанию
