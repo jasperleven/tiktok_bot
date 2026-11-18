@@ -2413,6 +2413,17 @@ async def got_ad_text(message: types.Message, state: FSMContext):
     videos = data.get("videos", [])
     batch_pending_count = data.get("batch_pending_count")
 
+    # Ссылка вместо текста объявления — TikTok отклоняет объявление с ошибкой
+    # "Some automatic creative settings aren't supported" (2026-11-18,
+    # WGC-M-S-online-sale-shopxyz: в ad_text вставили ссылку на лендинг).
+    if re.search(r"https?://|www\.|\b[\w-]+\.(by|ru|com|online)/", message.text or "", re.I):
+        await message.answer(
+            "⚠️ Это похоже на ссылку. Сюда нужен текст объявления (то, что видно под видео), "
+            "до 100 символов, без ссылок. Ссылку на лендинг бот спросит отдельным шагом.\n"
+            "Пришли текст ещё раз:"
+        )
+        return
+
     if batch_pending_count:
         # Пачечная загрузка: видео уже добавлены в список в _finalize_media_group,
         # текст применяется сразу ко всем только что добавленным (последним N).
@@ -3049,8 +3060,9 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                         # non-spark ad" иначе), даже когда ads_only_mode в /identity/get/ = null
                         # (подтверждено тестом 2026-09-02: у всех CUSTOMIZED_USER identity
                         # этого кабинета ads_only_mode: null).
-                        if identity.get("ads_only_mode") or identity.get("identity_type") == "CUSTOMIZED_USER":
-                            ci["dark_post_status"] = "ON"
+                        # Всегда dark post (только реклама, не пост в профиле) — как у
+                        # рабочих объявлений; см. комментарий у ad_config ниже.
+                        ci["dark_post_status"] = "ON"
 
                         group_creative_list.append({"creative_info": ci})
                         ad_text = vid_item.get("ad_text", "")
@@ -3087,14 +3099,16 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                         # между созданием и review_status: null → ALL_AVAILABLE, см.
                         # smart_plus/material/review_info/), никак не связанной с этим
                         # флагом. Отключаем: он не нужен и вызывал реальный побочный эффект.
+                        # Повторяем структуру рабочих объявлений бота (напр. «Гр30»,
+                        # «Топ» в WGC-M-S-online-sale-shopxyz): dark_post_status=ON и БЕЗ
+                        # identity на уровне ad_configuration. Без dark_post_status при
+                        # BC_AUTH_TT TikTok считает объявление Spark-постом и падает с 40002
+                        # "Some automatic creative settings aren't supported" (2026-11-18).
                         ad_config = {
                             "creative_auto_add_toggle": False,
-                            "identity_type": identity["identity_type"],
-                            "identity_id": identity["identity_id"],
+                            "dark_post_status": "ON",
                             "product_info_enabled": "NON_CATALOG",
                         }
-                        if identity.get("identity_authorized_bc_id"):
-                            ad_config["identity_authorized_bc_id"] = identity["identity_authorized_bc_id"]
                         # При ручном создании TikTok дублирует параметры ссылки отдельным
                         # структурированным полем ad_configuration.utm_params — без него
                         # интерфейс показывает "No URL parameters" и подстановка макросов
@@ -3121,6 +3135,12 @@ async def create_tiktok_campaign(advertiser_id, data, video_path):
                                 p = dict(sp_ad_payload)
                                 p["page_list"] = [{"page_id": page_id}]
                                 p["landing_page_url_list"] = []
+                                # Без ad_configuration TikTok включает автокреативы по умолчанию
+                                # (creative_auto_add_toggle), а для объявлений с мгновенной формой
+                                # они не поддерживаются → "Some automatic creative settings aren't
+                                # supported for this ad". Явно выключаем, utm_params не нужны.
+                                form_cfg = {k: v for k, v in ad_config.items() if k != "utm_params"}
+                                p["ad_configuration"] = form_cfg
                                 ad_payloads = [p]
                         for p in ad_payloads:
                             sp_ad_resp = await session.post(f"{base_url}/smart_plus/ad/create/", json=p, headers=headers)
